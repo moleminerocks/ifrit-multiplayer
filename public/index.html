@@ -3667,7 +3667,7 @@ return target;
 return y;
 }
 function outdoorBlockedAt(x, z, feetY){
-return blockedByShrine(x, z) || blockedByHouse(x, z, feetY) || blockedByCurtainWall(x, z, feetY);
+return blockedByShrine(x, z) || blockedByHouse(x, z, feetY) || blockedByCurtainWall(x, z, feetY) || blockedByAdellaTable(x, z);
 }
 function highAboveGround(){
 const fy = camera.position.y - EYE_HEIGHT;
@@ -9795,28 +9795,29 @@ const ex = {N:0,NE:1,E:1,SE:1,S:0,SW:-1,W:-1,NW:-1}[name];
 const ez = {N:-1,NE:-1,E:0,SE:1,S:1,SW:1,W:0,NW:-1}[name];
 return { x: ADL_BOARD_CX + ex*halfW, z: ez*halfD };
 }
-function addBettingFurnishings(I){
-const scene2 = I.scene;
+function addBettingFurnishings(I, opts){
+const scene2 = (opts && opts.parent) || I.scene;
+const tableMat = (opts && opts.mat) || doorMat;
 const TABLE_W = 2.30, TABLE_D = 0.74;
-const tableZ = -0.95;
+const tableZ = (opts && opts.tableZ !== undefined) ? opts.tableZ : -0.95;
 const topY = ADL_TABLE_H;
 const TOP_T = 0.06, FOOT_T = 0.05;
-const top = new THREE.Mesh(new THREE.BoxGeometry(TABLE_W, TOP_T, TABLE_D), doorMat);
+const top = new THREE.Mesh(new THREE.BoxGeometry(TABLE_W, TOP_T, TABLE_D), tableMat);
 top.position.set(0, topY - TOP_T/2, tableZ);
 top.castShadow = true; top.receiveShadow = true;
 scene2.add(top);
 I.adlTableTop = top;
 const waist = new THREE.Mesh(
-new THREE.BoxGeometry(TABLE_W*0.80, topY - TOP_T - FOOT_T, TABLE_D*0.62), doorMat);
+new THREE.BoxGeometry(TABLE_W*0.80, topY - TOP_T - FOOT_T, TABLE_D*0.62), tableMat);
 waist.position.set(0, (topY - TOP_T)/2, tableZ);
 waist.castShadow = true; waist.receiveShadow = true;
 scene2.add(waist);
-const foot = new THREE.Mesh(new THREE.BoxGeometry(TABLE_W*0.94, FOOT_T, TABLE_D*0.88), doorMat);
+const foot = new THREE.Mesh(new THREE.BoxGeometry(TABLE_W*0.94, FOOT_T, TABLE_D*0.88), tableMat);
 foot.position.set(0, FOOT_T/2, tableZ);
 foot.castShadow = true; foot.receiveShadow = true;
 scene2.add(foot);
 for(const sy of [topY - TOP_T - 0.02, FOOT_T + 0.02]){
-const m = new THREE.Mesh(new THREE.BoxGeometry(TABLE_W*0.86, 0.02, TABLE_D*0.70), doorMat);
+const m = new THREE.Mesh(new THREE.BoxGeometry(TABLE_W*0.86, 0.02, TABLE_D*0.70), tableMat);
 m.position.set(0, sy, tableZ);
 m.castShadow = true;
 scene2.add(m);
@@ -9830,6 +9831,7 @@ I.adlTableTopY = topY;
 I.adlTableZ = tableZ;
 I.tableCenter = { x: 0, z: tableZ };
 I.tableSize = { w: TABLE_W, d: TABLE_D };
+if(!(opts && opts.noLight)){
 const boardLight = new THREE.PointLight(0xfff2d8, 1.4, 5.5, 2);
 boardLight.position.set(0, topY + 0.55, tableZ);
 boardLight.castShadow = true;
@@ -9837,6 +9839,7 @@ boardLight.shadow.mapSize.set(512, 512);
 boardLight.shadow.camera.near = 0.05;
 boardLight.shadow.camera.far = 5.0;
 scene2.add(boardLight);
+}
 const LINE_W = 0.004, LINE_Y = 0.0005;
 const drawn = new Set();
 const edgeH = (cx2, cz2)=>{
@@ -10004,7 +10007,7 @@ mesh.userData.baseX = bx; mesh.userData.baseZ = bz;
 mesh.position.set(bx, mesh.userData.dipY || 0, bz);
 mesh.visible = true;
 }
-mesh.rotation.y = (ship.owner === 'bot') ? Math.PI : 0;
+mesh.rotation.y = ((ship.owner === 'bot') ? Math.PI : 0) + (I.adlSeatNorth ? Math.PI : 0);
 if(ship.life <= 1 && !ship.wrecked && mesh.userData.rockSign === undefined){
 mesh.userData.rockSign = Math.random() < 0.5 ? -1 : 1;
 }
@@ -10260,6 +10263,7 @@ adlRefresh(I);
 }
 }
 function adlBotAct(I){
+if(I.adlPvp) return;
 const st = I.adlState;
 if(!st || st.turn !== 'bot' || st.phase === 'over') return;
 if(I.adlBotBusy) return;
@@ -10403,6 +10407,11 @@ if(rest > 0) stashCount = Math.max(0, stashCount - rest);
 updateCollectedLabel();
 saveGame();
 }
+if(I.adlPvp){
+I.adlGameLive = false;
+adlNetSend({ type: 'adl-over', table: I.table.id, gameId: ADL_OUT.gameId, purse: collectedCount + stashCount });
+return;
+}
 setTimeout(()=>{
 if(st.winner === 'bot') playAdellaEh(); else playAdellaUh();
 }, 450);
@@ -10492,7 +10501,9 @@ const ADL_VIEW_MARGIN = 0.18;
 const ADL_VIEW_ELEV = 55 * Math.PI/180;
 const ADL_VIEW_DIST = 1.3;
 function adlActiveCamera(){
-return (INT.I && INT.I.adlBoardLocked) ? adlOrthoCam : camera;
+if(INT.I && INT.I.adlBoardLocked) return adlOrthoCam;
+if(adlOutLocked()) return adlOutSeatCam();
+return camera;
 }
 function updateAdlOrthoFrustum(){
 const aspect = window.innerWidth / window.innerHeight;
@@ -10573,11 +10584,11 @@ if(!_ray.ray.intersectPlane(_adlPlane, _adlHit)) return null;
 return I.adlBoardGroup.worldToLocal(_adlHit.clone());
 }
 function tryGrabAdellaPiece(e){
-const I = INT.I;
-if(!INT.active || mapMode || !I || !I.isBetting || !I.adlState) return false;
+const I = adlCurI();
+if(mapMode || !I || !I.isBetting || !I.adlState) return false;
 const st = I.adlState;
 if(st.phase === 'over' || st.turn !== 'player') return false;
-if(I.adlBotBusy && adlAnimBusy(I)) return false;
+if((I.adlBotBusy || I.adlPvp) && adlAnimBusy(I)) return false;
 if(pointerLocked){
 _ndc.set(0, 0);
 } else {
@@ -10625,14 +10636,14 @@ return true;
 return false;
 }
 function dragAdellaPiece(e){
-const I = INT.I;
+const I = adlCurI() || INT.I;
 if(!dragAdlPiece || !I) return;
 const p = adlBoardPointFromPointer(I, e);
 if(!p) return;
 dragAdlPiece.mesh.position.set(p.x, 0.012, p.z);
 }
 function releaseAdellaPiece(){
-const I = INT.I;
+const I = adlCurI() || INT.I;
 if(!dragAdlPiece){ return; }
 const d = dragAdlPiece; dragAdlPiece = null;
 if(!I || !I.adlState){ return; }
@@ -10651,6 +10662,7 @@ st.tides[d.idx].point = best;
 st.tidesLaid = st.tidesLaid || [];
 if(st.tidesLaid.indexOf(d.idx) < 0) st.tidesLaid.push(d.idx);
 st.tidesSet = st.tidesLaid.length;
+if(I.adlPvp) adlNetAct(I, { k:'tide-set', idx:d.idx, point:best });
 playAdellaTock();
 adlRefresh(I);
 adlAfterAction(I);
@@ -10667,6 +10679,7 @@ positionKey: adlPositionKey(st, 'player'),
 move: 'TD'+d.idx, ownerAtTime: 'player'
 });
 adlApplyTideAdvance(st, d.idx);
+if(I.adlPvp) adlNetAct(I, { k:'tide-adv', idx:d.idx });
 playAdellaTock();
 adlRefresh(I);
 adlAfterAction(I);
@@ -10692,6 +10705,7 @@ st.halves.bot = st.halves.player === 'west' ? 'east' : 'west';
 st.ships.forEach(s=>{ s.owner = (s.color === st.colours.player) ? 'player' : 'bot'; });
 }
 d.ship.col = best.col; d.ship.row = best.row; d.ship.placed = true;
+if(I.adlPvp) adlNetAct(I, { k:'moor', id:d.ship.id, col:best.col, row:best.row });
 playAdellaTock();
 adlRefresh(I);
 adlAfterAction(I);
@@ -10699,6 +10713,7 @@ return;
 }
 const pres = adlResolveMove(st, d.ship, best.col, best.row);
 d.ship.movedThisTurn = true;
+if(I.adlPvp) adlNetAct(I, { k:'ship-move', id:d.ship.id, col:best.col, row:best.row });
 if(!(pres && pres.rocked && !d.ship.wrecked)) playAdellaTock();
 adlRefresh(I);
 const pending = st.ships.filter(s=>s.owner==='player' && s.placed && !s.wrecked && !s.movedThisTurn);
@@ -10709,6 +10724,534 @@ adlAfterAction(I);
 adlAfterAction(I);
 }
 }
+/* ================= ADELLA ONLINE: player-vs-player tables outside village pubs / riads =================
+   One table per village. Two players take the two seats (south / north end), the server picks a random stake
+   (1..the smaller of the two purses) and relays every move. Rules, pieces and drag controls are the shop's own. */
+const ADL_OUT = { tables: [], cur: null, seat: 0, gameId: 0, oppSeated: false, cooldown: 0, cam: null, seatPose: null, pruneT: 0 };
+const ADL_SEAT_LZ = 0.82;
+function adlOutLocked(){ return !!(ADL_OUT.cur && ADL_OUT.cur.adlBoardLocked); }
+function adlCurI(){
+if(INT.active && INT.I && INT.I.isBetting) return INT.I;
+return adlOutLocked() ? ADL_OUT.cur : null;
+}
+function adlNetSend(obj){
+try{ if(window.PlayerNet && typeof window.PlayerNet.sendRaw === 'function') window.PlayerNet.sendRaw(obj); }catch(e){}
+}
+function adlNetAct(I, a){
+adlNetSend({ type: 'adl-act', table: I.table.id, gameId: ADL_OUT.gameId, a: a });
+}
+function adlLoseStake(stake){
+const fromCarried = Math.min(collectedCount, stake);
+collectedCount -= fromCarried;
+const rest = stake - fromCarried;
+if(rest > 0) stashCount = Math.max(0, stashCount - rest);
+updateCollectedLabel();
+saveGame();
+}
+function adlAddVillageTableAt(group, cx, cz, face, lx, lz, granite){
+const wx = cx + lx*Math.cos(face) + lz*Math.sin(face);
+const wz = cz - lx*Math.sin(face) + lz*Math.cos(face);
+return adlAddVillageTable(group, wx, wz, face, granite);
+}
+function adlAddVillageTable(parent, wx, wz, face, granite){
+const I = { outdoor: true, isBetting: true, adlPvp: true, adlBoardLocked: false, adlBoardLockCooldown: 0, adlSeatNorth: false, adlGameLive: false };
+const tg = new THREE.Group();
+const gy = terrainHeight(wx, wz);
+tg.position.set(wx, gy, wz);
+tg.rotation.y = face;
+parent.add(tg);
+I.group = tg;
+const bg = addBettingFurnishings(I, { parent: tg, tableZ: 0, mat: granite ? graniteMat : sandstoneMat, noLight: true });
+adlBuildPieces(I, bg);
+const t = { id: 'adl:' + Math.round(wx) + ',' + Math.round(wz), I: I, group: tg, x: wx, z: wz, face: face, gy: gy };
+I.table = t;
+ADL_OUT.tables.push(t);
+adlOutIdle(I);
+return t;
+}
+function adlOutInScene(obj){
+let o = obj;
+while(o){ if(o === scene) return true; o = o.parent; }
+return false;
+}
+function adlOutResetAnim(I){
+if(I.adlAnim){ I.adlAnim.queue.length = 0; I.adlAnim.active = null; I.adlAnim.onEmpty = null; I.adlAnim.wasBusy = false; }
+for(const id in (I.adlShipMeshes || {})){ const m = I.adlShipMeshes[id]; if(m) m.userData.adlAnimating = false; }
+(I.adlTideMeshes || []).forEach(m => { if(m) m.userData.adlAnimating = false; });
+}
+function adlOutIdle(I){
+const st = adlNewState();
+st.phase = 'idle'; st.turn = null;
+I.adlState = st; I.adlStake = 0; I.adlGameLive = false;
+adlOutResetAnim(I);
+adlHidePrompts(I);
+adlOutBuildStake(I);
+adlRefresh(I);
+}
+function adlOutStart(I, stake, setterSeat, gameId){
+const st = adlNewState();
+st.setter = (setterSeat === ADL_OUT.seat) ? 'player' : 'bot';
+st.chooser = (st.setter === 'bot') ? 'player' : 'bot';
+st.turn = st.setter;
+st.tidesSet = 0; st.tidesLaid = [];
+I.adlState = st; I.adlStake = stake; I.adlGameLive = true;
+ADL_OUT.gameId = gameId;
+adlOutResetAnim(I);
+adlHidePrompts(I);
+adlOutBuildStake(I);
+adlRefresh(I);
+}
+function adlOutBuildStake(I){
+(I.adlStakeMeshes || []).forEach(m => {
+if(m.parent) m.parent.remove(m);
+m.traverse(o => { if(o.isMesh && o.geometry) o.geometry.dispose(); });
+});
+I.adlStakeMeshes = [];
+const stake = I.adlStake || 0;
+if(stake <= 0) return;
+const tg = I.group;
+const treasures = Math.floor(stake/10);
+const ornaments = stake - treasures*10;
+const ORN_SCALE = 0.18;
+let ornR = 0.02, ornH = 0.03;
+ORNAMENT_LATHE_KEYS.forEach(k => {
+const probe = makeLatheOrnament(k);
+ornR = Math.max(ornR, (probe.userData.radius || 0.15) * ORN_SCALE);
+ornH = Math.max(ornH, (probe.userData.height || 0.10) * ORN_SCALE);
+probe.traverse(o => { if(o.isMesh && o.geometry) o.geometry.dispose(); });
+});
+const ornPitch = ornR*2 + 0.010;
+const AREA_W = 0.40, AREA_D = 0.40;
+const perRow = Math.max(1, Math.floor(AREA_W/ornPitch));
+const rows = Math.max(1, Math.floor(AREA_D/ornPitch));
+const perLayer = perRow*rows;
+for(let i = 0; i < ornaments; i++){
+const orn = makeLatheOrnament(ORNAMENT_LATHE_KEYS[i % ORNAMENT_LATHE_KEYS.length]);
+orn.scale.setScalar(ORN_SCALE);
+const layer = Math.floor(i/perLayer), within = i % perLayer;
+const col = within % perRow, row = Math.floor(within/perRow);
+orn.position.set(ADL_STACK_CX - AREA_W/2 + ornPitch*(col + 0.5), I.adlTableTopY + 0.002 + layer*ornH, -AREA_D/2 + ornPitch*(row + 0.5));
+orn.castShadow = true; orn.receiveShadow = true;
+tg.add(orn);
+I.adlStakeMeshes.push(orn);
+}
+const n = Math.min(treasures, 40);
+const RING_R = 2.5;
+for(let i = 0; i < n; i++){
+const a = (i/n)*Math.PI*2;
+const lx = Math.cos(a)*RING_R, lz = Math.sin(a)*RING_R;
+const w = tg.localToWorld(new THREE.Vector3(lx, 0, lz));
+const t = makeTreasure();
+t.position.set(lx, terrainHeight(w.x, w.z) - I.table.gy + 0.02, lz);
+t.rotation.y = Math.random()*Math.PI*2;
+t.castShadow = true; t.receiveShadow = true;
+tg.add(t);
+I.adlStakeMeshes.push(t);
+}
+}
+function adlOutSeatCam(){
+const I = ADL_OUT.cur, tg = I.group;
+let c = ADL_OUT.cam;
+if(!c) c = ADL_OUT.cam = new THREE.PerspectiveCamera();
+if(c.fov !== camera.fov || c.near !== camera.near || c.far !== camera.far || c.aspect !== camera.aspect){
+c.fov = camera.fov; c.near = camera.near; c.far = camera.far; c.aspect = camera.aspect;
+c.updateProjectionMatrix();
+}
+const halfW = (ADL_BOARD_W/2 + ADL_RING) + 0.20;
+const dist = Math.max(1.0, halfW/(Math.tan(camera.fov*Math.PI/360)*camera.aspect))*1.08;
+const sgn = I.adlSeatNorth ? -1 : 1;
+const top = I.adlTableTopY + 0.002;
+const pos = tg.localToWorld(new THREE.Vector3(0, top + Math.cos(ADL_VIEW_ELEV)*dist, sgn*Math.sin(ADL_VIEW_ELEV)*dist));
+const look = tg.localToWorld(new THREE.Vector3(0, top, 0));
+c.position.copy(pos);
+c.up.set(0, 1, 0);
+c.lookAt(look);
+c.updateMatrixWorld(true);
+return c;
+}
+function adlOutSit(t, seat){
+const I = t.I;
+ADL_OUT.cur = I; ADL_OUT.seat = seat; ADL_OUT.oppSeated = false; ADL_OUT.gameId = 0;
+I.adlSeatNorth = (seat === 1);
+t.group.updateMatrixWorld(true);
+const lz = seat === 0 ? ADL_SEAT_LZ : -ADL_SEAT_LZ;
+const w = t.group.localToWorld(new THREE.Vector3(0, 0, lz));
+const c = t.group.localToWorld(new THREE.Vector3(0, 0, 0));
+const sy = Math.atan2(-(c.x - w.x), -(c.z - w.z));
+ADL_OUT.seatPose = { x: w.x, z: w.z, yaw: sy };
+camera.position.set(w.x, outdoorGroundHeight(w.x, w.z, Infinity) + EYE_HEIGHT, w.z);
+VP.lx = w.x; VP.lz = w.z; VP.air = false; VP.vy = 0;
+yaw = sy; pitch = 0;
+if(I.adlPointMarks) for(const k in I.adlPointMarks) I.adlPointMarks[k].rotation.z = I.adlSeatNorth ? Math.PI : 0;
+I.adlBoardLocked = true;
+adlOutIdle(I);
+adlNetSend({ type: 'adl-sit', table: t.id, seat: seat, purse: collectedCount + stashCount });
+}
+function adlOutReset(I){
+dragAdlPiece = null;
+I.adlBoardLocked = false;
+const lz = I.adlSeatNorth ? -(ADL_SEAT_LZ + 0.9) : (ADL_SEAT_LZ + 0.9);
+const w = I.group.localToWorld(new THREE.Vector3(0, 0, lz));
+camera.position.set(w.x, outdoorGroundHeight(w.x, w.z, Infinity) + EYE_HEIGHT, w.z);
+VP.lx = w.x; VP.lz = w.z;
+ADL_OUT.cur = null; ADL_OUT.seatPose = null; ADL_OUT.oppSeated = false;
+ADL_OUT.cooldown = 1.2;
+adlOutIdle(I);
+try{ updateCameraOrientation(); }catch(e){}
+}
+function adlOutLeave(){
+const I = ADL_OUT.cur; if(!I) return;
+const st = I.adlState;
+if(I.adlGameLive && st && st.phase !== 'over' && st.phase !== 'idle' && (I.adlStake || 0) > 0) adlLoseStake(I.adlStake);
+adlNetSend({ type: 'adl-leave', table: I.table.id });
+adlOutReset(I);
+}
+function adlOutAbort(){
+const I = ADL_OUT.cur; if(!I) return;
+adlOutReset(I);
+}
+function adlOutUnload(){
+const I = ADL_OUT.cur; if(!I) return;
+const st = I.adlState;
+if(I.adlGameLive && st && st.phase !== 'over' && st.phase !== 'idle' && (I.adlStake || 0) > 0) adlLoseStake(I.adlStake);
+adlNetSend({ type: 'adl-leave', table: I.table.id });
+}
+function adlOutWinByForfeit(I){
+const st = I.adlState; if(!st) return;
+st.winner = 'player'; st.phase = 'over'; I.adlGameLive = false;
+const stake = I.adlStake || 0;
+if(stake > 0){
+collectedCount += stake;
+playVoiceLine('ching.mp3', 0.45);
+updateCollectedLabel();
+saveGame();
+}
+}
+function adlOutTideTarget(st, idx){
+const t = st.tides[idx];
+const p = adlPointPos(t.point);
+const same = st.tides.filter(x => x.point === t.point);
+const n = same.length;
+if(n <= 1) return { x: p.x, z: p.z };
+const k = same.indexOf(t), R = ADL_TIDE_RADIUS*1.3, a = (k/n)*Math.PI*2;
+return { x: p.x + Math.cos(a)*R, z: p.z + Math.sin(a)*R };
+}
+/* The opponent's action, applied with the same rules as a local move (they are 'bot' here, I am 'player'). */
+function adlOutApplyRemote(I, a){
+const st = I.adlState;
+if(!st || st.phase === 'over' || st.phase === 'idle' || !I.adlGameLive || !a) return;
+const done = (fn) => adlQueueStep(I, null, fn, null, 0.01);
+if(a.k === 'tide-set'){
+if(!st.tides[a.idx] || ADL_POINT_ORDER.indexOf(a.point) < 0) return;
+adlQueueStep(I, I.adlTideMeshes[a.idx], () => {
+st.tides[a.idx].point = a.point;
+st.tidesLaid = st.tidesLaid || [];
+if(st.tidesLaid.indexOf(a.idx) < 0) st.tidesLaid.push(a.idx);
+st.tidesSet = st.tidesLaid.length;
+}, () => adlOutTideTarget(st, a.idx), 0.6, playAdellaTock);
+done(() => { adlRefresh(I); adlAfterAction(I); });
+} else if(a.k === 'tide-adv'){
+if(!st.tides[a.idx]) return;
+adlQueueStep(I, I.adlTideMeshes[a.idx], () => { adlApplyTideAdvance(st, a.idx); }, () => adlOutTideTarget(st, a.idx), 0.6, playAdellaTock);
+done(() => { adlRefresh(I); adlAfterAction(I); });
+} else if(a.k === 'moor'){
+adlQueueStep(I, I.adlShipMeshes[a.id], () => {
+const ship = st.ships.find(s => s.id === a.id);
+if(!ship) return;
+if(!st.colours.player){
+st.colours.bot = ship.color;
+st.colours.player = ship.color === 'beige' ? 'burgundy' : 'beige';
+st.halves.bot = adlHalfOf(a.col);
+st.halves.player = st.halves.bot === 'west' ? 'east' : 'west';
+st.ships.forEach(s => { s.owner = (s.color === st.colours.bot) ? 'bot' : 'player'; });
+}
+ship.col = a.col; ship.row = a.row; ship.placed = true;
+}, () => adlCellPos(a.col, a.row), 0.65, playAdellaTock);
+done(() => { adlRefresh(I); adlAfterAction(I); });
+} else if(a.k === 'ship-move'){
+let sound = null;
+adlQueueStep(I, I.adlShipMeshes[a.id], () => {
+const sh = st.ships.find(x => x.id === a.id);
+if(!sh || sh.wrecked) return 0;
+const before = st.ships.reduce((n, s2) => n + (s2.wrecked ? 0 : s2.life), 0);
+const res = adlResolveMove(st, sh, a.col, a.row);
+sh.movedThisTurn = true;
+const after = st.ships.reduce((n, s2) => n + (s2.wrecked ? 0 : s2.life), 0);
+sound = (res && res.rocked && !sh.wrecked) ? null : playAdellaTock;
+return after < before ? 0.55 : 0;
+}, () => {
+const sh = st.ships.find(x => x.id === a.id);
+return sh && sh.placed ? adlCellPos(sh.col, sh.row) : null;
+}, 0.5, () => { if(sound){ sound(); sound = null; } });
+done(() => {
+const pending = st.ships.filter(s => s.owner === 'bot' && s.placed && !s.wrecked && !s.movedThisTurn);
+if(!pending.length){
+st.ships.forEach(s => { if(s.owner === 'bot') s.movedThisTurn = false; });
+adlRefresh(I); adlAfterAction(I);
+} else if(adlSideWrecked(st, 'player') || adlSideWrecked(st, 'bot')){
+adlRefresh(I); adlAfterAction(I);
+} else adlRefresh(I);
+});
+}
+}
+function adlOutOnMsg(m){
+const I = ADL_OUT.cur;
+if(!I || !m || m.table !== I.table.id) return;
+switch(m.type){
+case 'adl-seat': ADL_OUT.oppSeated = !!m.opp; break;
+case 'adl-denied': adlOutReset(I); break;
+case 'adl-opp':
+ADL_OUT.oppSeated = !!m.seated;
+if(!m.seated) setTimeout(() => { if(ADL_OUT.cur === I && !ADL_OUT.oppSeated && !I.adlGameLive) adlOutIdle(I); }, 1500);
+break;
+case 'adl-start':
+ADL_OUT.oppSeated = true;
+adlOutStart(I, m.stake | 0, m.setter, m.gameId);
+break;
+case 'adl-act':
+if(m.gameId === ADL_OUT.gameId) adlOutApplyRemote(I, m.a);
+break;
+case 'adl-forfeit':
+if(m.gameId === ADL_OUT.gameId && I.adlGameLive) adlOutWinByForfeit(I);
+break;
+}
+}
+function adlOutCanSit(){
+if(INT.active || DUN.active || DUN.deathSeq || mapMode) return false;
+if(mountedHorse || boardedBoat || CARPET.mounted || (wagonState && wagonState.aboard)) return false;
+return !!(window.PlayerNet && window.PlayerNet.id);
+}
+function adlOutTick(dt){
+const list = ADL_OUT.tables;
+if(!list.length) return;
+ADL_OUT.cooldown = Math.max(0, ADL_OUT.cooldown - dt);
+ADL_OUT.pruneT += dt;
+if(ADL_OUT.pruneT > 1.5){
+ADL_OUT.pruneT = 0;
+for(let i = list.length - 1; i >= 0; i--){
+if(!adlOutInScene(list[i].group)){
+if(ADL_OUT.cur === list[i].I){ try{ adlOutAbort(); }catch(e){} }
+list.splice(i, 1);
+}
+}
+}
+const px = camera.position.x, pz = camera.position.z;
+for(const t of list){
+const I = t.I;
+const d2 = (t.x - px)*(t.x - px) + (t.z - pz)*(t.z - pz);
+if(I === ADL_OUT.cur || d2 < 16*16){
+updateAdellaAnim(I, dt);
+updateAdellaPieces(I, dt);
+}
+}
+const cur = ADL_OUT.cur;
+if(cur){
+if(DUN.deathSeq || INT.active || DUN.active){ adlOutLeave(); return; }
+if(retreatZone || (keyS && !keyW)) adlOutLeave();
+return;
+}
+if(ADL_OUT.cooldown > 0 || !adlOutCanSit()) return;
+for(const t of list){
+const dx = px - t.x, dz = pz - t.z;
+if(dx*dx + dz*dz > 9) continue;
+const c = Math.cos(t.face), s = Math.sin(t.face);
+const lx = dx*c - dz*s, lz = dx*s + dz*c;
+if(Math.abs(lx) > 0.5 || Math.abs(lz) > 1.3) continue;
+const len = Math.hypot(dx, dz) || 1;
+const fdot = (-Math.sin(yaw))*(-dx/len) + (-Math.cos(yaw))*(-dz/len);
+if(fdot < 0.5) continue;
+const seat = lz > 0 ? 0 : 1;
+const sl = seat === 0 ? ADL_SEAT_LZ : -ADL_SEAT_LZ;
+const sx = t.x + 0*c + sl*s, sz = t.z - 0*s + sl*c;
+let taken = false;
+for(const r of REMOTE_PLAYERS.values()){ if(r.pos && r.place === 'out' && Math.hypot(r.x - sx, r.z - sz) < 0.7){ taken = true; break; } }
+if(taken) continue;
+adlOutSit(t, seat);
+break;
+}
+}
+function blockedByAdellaTable(x, z){
+if(ADL_OUT.cur) return false;
+const L = ADL_OUT.tables;
+for(let i = 0; i < L.length; i++){
+const t = L[i];
+const dx = x - t.x, dz = z - t.z;
+if(dx*dx + dz*dz > 9) continue;
+const c = Math.cos(t.face), s = Math.sin(t.face);
+const lx = dx*c - dz*s, lz = dx*s + dz*c;
+if(Math.abs(lx) < 1.15 + PLAYER_R && Math.abs(lz) < 0.37 + PLAYER_R) return true;
+}
+return false;
+}
+/* ================= end adella online ================= */
+/* ================= REMAINS: skeleton + loot sack left where a player was killed on Mindor =================
+   The server owns the list of corpses and their contents; every client draws the ones in its own world
+   (outdoors, or the same Mindor building). The sack is the carried sack, opened by proximity; items are dragged to yourself. */
+const REMAINS = new Map();
+let dragRemains = null;
+const REM_OPEN_DIST = 2.6, REM_COLLECT_DIST = 1.15, REM_HIDE_MAX = 8;
+let _remSackTex = null;
+function remHash(s){ let h = 7; for(let i = 0; i < s.length; i++) h = (h*31 + s.charCodeAt(i)) >>> 0; return h; }
+function remainsRebuildSack(s, open){
+const prof = sackProfile(open);
+const geo = new THREE.LatheGeometry(prof, 28);
+const L = prof.length, cols = new Float32Array(geo.attributes.position.count*3);
+const shade = j => j < L - 3 ? 1.0 : (j === L - 3 ? 0.55 : (j === L - 2 ? 0.22 : 0.06));
+for(let i = 0; i < geo.attributes.position.count; i++){ const v = shade(i % L); cols[i*3] = cols[i*3+1] = cols[i*3+2] = v; }
+geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+if(s.body.geometry) s.body.geometry.dispose();
+s.body.geometry = geo;
+s.inner.geometry = geo;
+}
+function remainsMakeSack(){
+if(!_remSackTex) _remSackTex = makeBurlapTexture();
+const g = new THREE.Group();
+const clothMat = new THREE.MeshStandardMaterial({ map: _remSackTex, color: 0xffffff, roughness: 1.0, side: THREE.FrontSide, vertexColors: true });
+const body = new THREE.Mesh(new THREE.BufferGeometry(), clothMat);
+const inner = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide }));
+g.add(body); g.add(inner);
+const s = { group: g, body: body, inner: inner, built: 0 };
+remainsRebuildSack(s, 0);
+g.traverse(o => { if(o.isMesh){ o.raycast = () => {}; o.castShadow = true; o.receiveShadow = true; } });
+g.scale.setScalar(1.25);
+g.rotation.z = 0.10;
+return s;
+}
+function remainsGroundY(r, x, z){
+return (r.place === 'out') ? outdoorGroundHeight(x, z, r.y + 1.2) : r.y;
+}
+function remainsAdd(c){
+if(!c || !c.id || REMAINS.has(c.id)) return;
+const now = performance.now()/1000;
+const r = { id: c.id, victim: c.victim, place: c.place || 'out', x: c.x, y: c.y, z: c.z, yaw: c.yaw || 0,
+items: (c.items || []).slice(), born: now - (c.age || 0), showAt: 0, fig: null, sack: null,
+itemMeshes: new Map(), revealed: false, open: 0, revealT: 0 };
+const a = (remHash(c.id) % 628)/100;
+r.sx = c.x; r.sz = c.z;
+if(c.victim && window.PlayerNet && window.PlayerNet.id === c.victim) r.showAt = now + 5.5;
+REMAINS.set(c.id, r);
+const rp = REMOTE_PLAYERS.get(c.victim);
+if(rp && (c.age || 0) < 3){ rp.hideStart = now; rp.hideUntil = now + REM_HIDE_MAX; rp.hideFrom = { x: c.x, z: c.z, place: r.place }; }
+}
+function remainsDisposeObj(o){
+if(!o) return;
+if(o.parent) o.parent.remove(o);
+o.traverse(m => { if(m.isMesh && m.geometry) m.geometry.dispose(); });
+}
+function remainsDetach(r){
+if(r.fig && r.fig.parent) r.fig.parent.remove(r.fig);
+if(r.sack && r.sack.group.parent) r.sack.group.parent.remove(r.sack.group);
+for(const m of r.itemMeshes.values()) if(m.parent) m.parent.remove(m);
+}
+function remainsRemove(id){
+const r = REMAINS.get(id); if(!r) return;
+if(dragRemains && dragRemains.corpse === id) dragRemains = null;
+remainsDisposeObj(r.fig);
+if(r.sack) remainsDisposeObj(r.sack.group);
+for(const m of r.itemMeshes.values()) remainsDisposeObj(m);
+REMAINS.delete(id);
+}
+function remainsClear(){ for(const id of Array.from(REMAINS.keys())) remainsRemove(id); }
+function remainsBuildFigure(r, now){
+const skel = createFigure(false, false, false, false, true);
+applySkeletonCrumple(skel);
+const fresh = (now - r.born) < 4;
+skel.position.set(r.x, remainsGroundY(r, r.x, r.z) + (fresh ? 0.45 : 0.05), r.z);
+skel.rotation.y = r.yaw + Math.PI*0.5;
+const gfn = (r.place === 'out') ? ((x, z, y) => outdoorGroundHeight(x, z, y)) : (() => r.y);
+buildSkeletonRagdoll(skel, gfn, null, true);
+if(!fresh){ for(let i = 0; i < 160; i++) updateSkeletonRagdoll(skel, 0.033); }
+r.fig = skel;
+}
+function remainsDropAll(r){
+r.items = [];
+if(dragRemains && dragRemains.corpse === r.id) dragRemains = null;
+if(r.sack){ remainsDisposeObj(r.sack.group); r.sack = null; }
+}
+function remainsOnGrant(m){
+if(!m) return;
+const g = (m.gold | 0), hd = m.heads || {};
+if(g > 0) collectedCount += g;
+for(const k of ['ifrit','spriggan','bucca']){
+const n = (hd[k] | 0);
+if(n > 0 && collectedHeadTally[k] !== undefined) collectedHeadTally[k] += n;
+}
+playVoiceLine('ching.mp3', 0.45);
+updateCollectedLabel();
+saveGame();
+const r = REMAINS.get(m.corpse);
+if(r) remainsDropAll(r);
+}
+function remainsOnGone(m){
+const r = m && REMAINS.get(m.corpse);
+if(r) remainsDropAll(r);
+}
+function remainsTick(dt){
+if(!REMAINS.size) return;
+const now = performance.now()/1000;
+const myPlace = localPlaceKey(), world = remoteWorldScene();
+const px = camera.position.x, pz = camera.position.z;
+for(const r of REMAINS.values()){
+if(r.place !== myPlace || !world || now < r.showAt){ remainsDetach(r); continue; }
+if(!r.fig) remainsBuildFigure(r, now);
+if(r.fig.parent !== world) world.add(r.fig);
+updateSkeletonRagdoll(r.fig, dt);
+if(!r.items.length){ if(r.sack){ remainsDisposeObj(r.sack.group); r.sack = null; } continue; }
+if(!r.sack){
+r.sack = remainsMakeSack();
+r.sack.group.position.set(r.sx, remainsGroundY(r, r.sx, r.sz), r.sz);
+}
+if(r.sack.group.parent !== world) world.add(r.sack.group);
+if(r.pendingUntil){
+if(now > r.pendingUntil){ r.pendingUntil = 0; r.sack.group.visible = true; r.sack.group.position.set(r.sx, remainsGroundY(r, r.sx, r.sz), r.sz); }
+else continue;
+}
+const dragging = dragRemains && dragRemains.r === r;
+const d = Math.hypot(r.sack.group.position.x - px, r.sack.group.position.z - pz);
+r.open += (((d < REM_OPEN_DIST || dragging) ? 1 : 0) - r.open)*Math.min(1, dt*4);
+if(Math.abs(r.open - r.sack.built) > 0.02){ remainsRebuildSack(r.sack, r.open); r.sack.built = r.open; }
+}
+}
+function remainsItemAtRay(ray){
+let best = null, bestT = Infinity;
+const o = ray.origin;
+for(const r of REMAINS.values()){
+if(!r.sack || !r.sack.group.parent || !r.sack.group.visible || !r.items.length) continue;
+const p = r.sack.group.position;
+const c = new THREE.Vector3(p.x, p.y + 0.3, p.z);
+if(ray.distanceSqToPoint(c) > 0.34*0.34) continue;
+const t = o.distanceTo(c);
+if(t < bestT && t <= GRAB_DIST){ bestT = t; best = { r: r }; }
+}
+return best;
+}
+function tryGrabRemains(e){
+if(mapMode || !REMAINS.size || adlOutLocked()) return false;
+const hit = remainsItemAtRay(dragRayAt(e.clientX, e.clientY));
+if(!hit) return false;
+dragRemains = { corpse: hit.r.id, r: hit.r };
+return true;
+}
+function dragRemainsBy(){
+const d = dragRemains; if(!d || !d.r.sack) return;
+const g = d.r.sack.group;
+const tg = dragPlaneFollow(d, g.position.x, g.position.z, g.position.y);
+if(!tg) return;
+g.position.x = tg[0]; g.position.z = tg[1];
+g.position.y = remainsGroundY(d.r, tg[0], tg[1]);
+d.near = Math.hypot(tg[0] - camera.position.x, tg[1] - camera.position.z) < REM_COLLECT_DIST;
+}
+function releaseRemains(){
+const d = dragRemains; if(!d) return;
+dragRemains = null;
+const r = d.r;
+if(d.near && r.sack){
+r.sack.group.visible = false;
+r.pendingUntil = performance.now()/1000 + 2.5;
+adlNetSend({ type: 'loot-take', corpse: d.corpse });
+}
+}
+/* ================= end remains ================= */
 let dragPubBottle = null;
 const _pubPlane = new THREE.Plane();
 const _pubHit = new THREE.Vector3();
@@ -11173,6 +11716,26 @@ paperBox(g, sw, H*(k + 1)/N, run, W/2 + sw/2, 0, D*0.39 - run*(k + 0.5), mat);
 }
 return g;
 }
+function makeTravelWarningTexture(){
+const W = 512, H = 160;
+const c = document.createElement('canvas'); c.width = W; c.height = H;
+const g = c.getContext('2d');
+g.fillStyle = '#e8dcbf'; g.fillRect(0, 0, W, H);
+for(let i=0;i<300;i++){ g.fillStyle = 'rgba(120,95,55,'+(0.02+Math.random()*0.04)+')'; g.fillRect(Math.random()*W, Math.random()*H, 2+Math.random()*3, 1+Math.random()*2); }
+g.strokeStyle = 'rgba(110,85,50,0.45)'; g.lineWidth = 3; g.strokeRect(4, 4, W-8, H-8);
+g.textAlign = 'center'; g.textBaseline = 'middle';
+let size = 46;
+g.font = 'bold ' + size + 'px Georgia, serif';
+while(g.measureText('TRAVEL WARNING').width > W - 40 && size > 20){ size -= 2; g.font = 'bold ' + size + 'px Georgia, serif'; }
+g.fillStyle = '#b01818';
+g.fillText('TRAVEL WARNING', W/2, 38);
+g.fillStyle = '#0a0806';
+g.font = '30px Georgia, serif';
+g.fillText('Mindor is at war and is', W/2, 92);
+g.fillText('unsafe for travel.', W/2, 128);
+const t = new THREE.CanvasTexture(c); t.anisotropy = 4;
+return t;
+}
 function addLibraryMapKeyPages(I, arabic, tableZ){
 const TABLE_H = 1.0, PAGE_W = 0.30, PAGE_D = 0.45;
 for(const [kind, x, yaw] of [['castle', 0.545, 0], ['village', -0.545, 0]]){
@@ -11190,6 +11753,14 @@ const c = buildKeyCastle3D(); c.position.set(0, 0, -0.105); grp.add(c);
 for(const [hx, w, d, h] of [[-0.098, 4.5, 4, 3.2], [-0.004, 7, 6, 6.4], [0.092, 6, 5, 3.2]]){
 const hs = buildKeyHouse3D(w, d, h, !arabic); hs.position.set(hx, 0, -0.085); grp.add(hs);
 }
+}
+if(kind === 'village'){
+const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.0875),
+new THREE.MeshStandardMaterial({ map: makeTravelWarningTexture(), roughness: 0.95 }));
+strip.rotation.set(-Math.PI/2, 0, 0.05);
+strip.position.set(-0.01, 0.0015, -(PAGE_D/2 + 0.062));
+strip.receiveShadow = true;
+grp.add(strip);
 }
 I.scene.add(grp);
 }
@@ -13832,7 +14403,7 @@ const f = Math.min(1, dt*20);
 shownPivotX += (swordPivotX - shownPivotX)*f; shownPivotZ += (swordPivotZ - shownPivotZ)*f; shownRoll += (swordRoll - shownRoll)*f;
 } else { shownPivotX = swordPivotX; shownPivotZ = swordPivotZ; shownRoll = swordRoll; }
 resolveSwingHit(dt);
-const _adlHide = !!(INT.active && INT.I && INT.I.isBetting && INT.I.adlBoardLocked);
+const _adlHide = !!(INT.active && INT.I && INT.I.isBetting && INT.I.adlBoardLocked) || adlOutLocked();
 equippedSword.visible = swordDrawn || !_adlHide;
 if(swordDrawn){
 const SWING_JUT = 0.18;
@@ -16641,6 +17212,7 @@ return terrainHeight(cx + lx*cosPF + lz*sinPF, cz - lx*sinPF + lz*cosPF);
 const pubOutX = pubSideH(1) <= pubSideH(-1) ? 1 : -1;
 const pubPorch = addPorchAndStairs(pubG, MAIN_W, MAIN_D, cx, cz, rFace, pGy, graniteMat, pubOutX);
 platforms.push(...pubPorch.platforms);
+try{ adlAddVillageTableAt(group, cx, cz, pubFace, -pubOutX*(MAIN_W/2 + 3.4), MAIN_D/2 + 0.8, true); }catch(e){ console.error('adella table (pub):', e); }
 const rfz = MAIN_D/2;
 doors.push({
 cx: cx + Math.sin(rFace)*rfz, cz: cz + Math.cos(rFace)*rfz, angle: rFace,
@@ -16663,6 +17235,7 @@ const riadG = new THREE.Group();
 riadG.position.set(cx, rGy, cz);
 riadG.rotation.y = rFace;
 group.add(riadG);
+try{ adlAddVillageTableAt(group, cx, cz, rFace, RW/2 + 3.4, RD/2 - 1.0, false); }catch(e){ console.error('adella table (riad):', e); }
 const riadWallMat = sandstoneMat;
 const riadDarkMat = mudDarkMat;
 const hwR = RW/2, hdR = RD/2, COURT = 7.0, chwR = COURT/2;
@@ -20030,6 +20603,7 @@ else if(k==='d') keyD=false;
 else if(e.key==='Shift') keyShiftHeld=false;
 });
 function strafeIntentMultiplier(){
+if(adlOutLocked()) return 0;
 if(keyA && !keyD) return -1;
 if(keyD && !keyA) return 1;
 return 0;
@@ -20255,7 +20829,7 @@ const target = pitchDeg <= -62 ? 1 : (pitchDeg >= -50 ? 0 : (sack.open > 0.5 ? 1
 const hold = INT.active && INT.I && INT.I.sackHidden;
 sack.open += ((hold ? 0 : target) - sack.open)*Math.min(1, dt*6.5);
 const open = sack.open;
-const playingAdella = !!(INT.active && INT.I && INT.I.isBetting && INT.I.adlBoardLocked);
+const playingAdella = !!(INT.active && INT.I && INT.I.isBetting && INT.I.adlBoardLocked) || adlOutLocked();
 sack.labelsOff = !!dragFrag;
 const show = !mapMode && !(DUN.deathSeq) && !playingAdella && !dragFrag;
 const scn = INT.active ? INT.scene : (DUN.active ? DUN.scene : scene);
@@ -20394,6 +20968,7 @@ advanceSwordTutorial(5, drawnIsAxe() ? 'Swipe ' + weaponNoun(equippedSword.userD
 }
 }
 function moveIntentMultiplier(){
+if(adlOutLocked()) return 0;
 const kFwd = keyW && !keyS, kBack = keyS && !keyW;
 if(!moveForward && !kFwd && !kBack) return 0;
 if(retreatZone || kBack) return -1;
@@ -20690,6 +21265,7 @@ if(dragSword2) dragSword2By(0, 0);
 if(dragSword3) dragSword3By(0, 0);
 if(dragWallSword) dragWallSwordBy(0, 0);
 if(dragLoot) dragLootBy(0, 0);
+if(dragRemains) dragRemainsBy();
 if(dragPot) dragPotBy(0, 0);
 if(dragPlatterGoblet) dragPlatterGobletBy(0, 0);
 if(dragStashItem) dragStashItemBy(0, 0);
@@ -21109,6 +21685,7 @@ if(tryGrabCarpetSack(e)) return;
 if(tryGrabMoonAxe(e)) return;
 if(tryGrabBookPart(e)) return;
 if(tryGrabFragment(e)) return;
+if(tryGrabRemains(e)) return;
 if(tryGrabLoot(e)) return;
 if(tryGrabPot(e)) return;
 if(tryGrabPlatterGoblet(e)) return;
@@ -21153,6 +21730,7 @@ if(dragFrag){ dragFragmentBy(e); return; }
 if(CARPET.sackPress){ if(Math.hypot(px - CARPET.sackPress.x, py - CARPET.sackPress.y) > 14) carpetPullFromSack(px, py); return; }
 if(CARPET.drag){ dragCarpetBy(px - CARPET.drag.lastX, py - CARPET.drag.lastY); CARPET.drag.lastX = px; CARPET.drag.lastY = py; return; }
 if(dragMoonAxe){ dragMoonAxeBy(0, 0); return; }
+if(dragRemains){ dragRemainsBy(); return; }
 if(dragLoot){
 dragLootBy(px - dragLoot.lastX, py - dragLoot.lastY);
 dragLoot.lastX = px; dragLoot.lastY = py;
@@ -21289,6 +21867,7 @@ releaseSword2();
 releaseSword3();
 releaseWallSword();
 releaseAdellaPiece();
+releaseRemains();
 releasePubBottle();
 releaseDealHand();
 releaseHead();
@@ -24403,8 +24982,7 @@ const REMOTE_PLAYERS = new Map();
 function remoteSpawn(id, formId){
 remoteRemove(id);
 const fig = createPlayerForm(formId);
-scene.add(fig);
-const r = { fig, formId: fig.userData.formId, x: 0, z: 0, y: 0, yaw: 0, moving: false, onMindor: false, lastT: 0, lastX: undefined, lastZ: undefined, pos: false };
+const r = { fig, place: 'out', formId: fig.userData.formId, x: 0, z: 0, y: 0, yaw: 0, moving: false, onMindor: false, lastT: 0, lastX: undefined, lastZ: undefined, pos: false };
 REMOTE_PLAYERS.set(id, r);
 return r;
 }
@@ -24420,6 +24998,7 @@ const m = new THREE.Mesh(geo, carpetMaterial());
 m.castShadow = true; m.frustumCulled = false;
 return m;
 }
+function remoteWorldScene(){ return DUN.active ? DUN.scene : (INT.active ? INT.scene : scene); }
 function remoteEnsureVehicle(r){
 const m = r.mount;
 const key = m ? (m.type + ':' + (m.variant || '') + (m.galleon ? 'G' : '') + (m.grassy ? 'g' : '')) : null;
@@ -24432,7 +25011,7 @@ if(m.type === 'carpet') v = remoteMakeCarpet();
 else if(m.type === 'horse') v = createHorse(m.variant);
 else if(m.type === 'boat'){ v = createBoat(!!m.grassy, !!m.galleon); if(m.scale && m.scale !== 1) v.scale.setScalar(m.scale); }
 }catch(e){ console.error('remote vehicle:', e); }
-if(v){ scene.add(v); r.vehicle = v; }
+if(v){ r.vehicle = v; }
 r.vehicleKey = key;
 }
 function remoteRemove(id){
@@ -24453,7 +25032,8 @@ r.lastX = st.x; r.lastZ = st.z; r.lastT = now;
 r.x = st.x; r.z = st.z;
 r.y = (st.y !== undefined) ? st.y : outdoorGroundHeight(st.x, st.z, Infinity);
 r.yaw = st.yaw !== undefined ? st.yaw : r.yaw;
-r.mount = st.mount || null;
+r.place = (typeof st.place === 'string') ? st.place : 'out';
+r.mount = (r.place === 'out' && st.mount) ? st.mount : null;
 r.drawn = !!st.drawn;
 if(st.pitch !== undefined) r.pitch = st.pitch;
 r.onMindor = (st.onMindor !== undefined) ? !!st.onMindor : (islandIdAt(st.x, st.z) === ISLAND_MINDOR);
@@ -24462,9 +25042,25 @@ r.pos = true;
 function remoteTick(dt){
 if(!REMOTE_PLAYERS.size) return;
 const tNow = performance.now()/1000;
+const myPlace = localPlaceKey(), world = remoteWorldScene();
 for(const r of REMOTE_PLAYERS.values()){
 if(!r.pos) continue;
+if(r.hideUntil){
+if(tNow > r.hideUntil || (tNow > r.hideStart + 2.5 && (r.place !== r.hideFrom.place || Math.hypot(r.x - r.hideFrom.x, r.z - r.hideFrom.z) > 3))) r.hideUntil = 0;
+else {
+if(r.fig.parent) r.fig.parent.remove(r.fig);
+if(r.vehicle && r.vehicle.parent) r.vehicle.parent.remove(r.vehicle);
+continue;
+}
+}
+if(r.place !== myPlace || !world){
+if(r.fig.parent) r.fig.parent.remove(r.fig);
+if(r.vehicle && r.vehicle.parent) r.vehicle.parent.remove(r.vehicle);
+continue;
+}
 remoteEnsureVehicle(r);
+if(r.fig.parent !== world) world.add(r.fig);
+if(r.vehicle && r.vehicle.parent !== world) world.add(r.vehicle);
 const m = r.mount, v = r.vehicle;
 const near = Math.hypot(r.x - camera.position.x, r.z - camera.position.z) < 70;
 if(m && v){
@@ -24500,7 +25096,33 @@ updatePlayerForm(r.fig, { moving: r.moving, yaw: r.yaw + Math.PI, cloth: near, d
 /* ---------- fighting: only on Mindor; simultaneous swipes deflect ---------- */
 const PVP = { lastLocalSlashT: -999, range: 2.4, facingDot: 0.25, deflectWin: 0.35, mirrorSlash: false };
 function pvpNow(){ return performance.now()/1000; }
-function pvpLocalOnMindor(){ return islandIdAt(camera.position.x, camera.position.z) === ISLAND_MINDOR; }
+function pvpLocalOnMindor(){
+if(ADL_OUT.cur) return false;
+if(DUN.active){
+const sh = DUN.returnShrine;
+if(!sh) return false;
+const dx = (sh.castleX !== undefined) ? sh.castleX : sh.cx, dz = (sh.castleX !== undefined) ? sh.castleZ : sh.cz;
+return (dx !== undefined) && islandIdAt(dx, dz) === ISLAND_MINDOR;
+}
+if(INT.active){
+const d = INT.door;
+if(!d) return false;
+const bx = (d.houseX !== undefined) ? d.houseX : d.cx, bz = (d.houseZ !== undefined) ? d.houseZ : d.cz;
+return (bx !== undefined) && islandIdAt(bx, bz) === ISLAND_MINDOR;
+}
+return islandIdAt(camera.position.x, camera.position.z) === ISLAND_MINDOR;
+}
+/* which world the player is in: 'out' (outdoors), 'i:<door>' (building interior) or 'd:<shrine>' (dungeon/cave).
+   Interiors and dungeons are generated from a seed taken from the door/shrine position, so the same key means the same layout. */
+function placeKeyOf(o){
+const q = (v) => (typeof v === 'number') ? Math.round(v*10) : '';
+return o ? [q(o.cx), q(o.cz), q(o.houseX), q(o.houseZ), q(o.castleX), q(o.castleZ)].join(',') : '';
+}
+function localPlaceKey(){
+if(DUN.active) return 'd:' + placeKeyOf(DUN.returnShrine);
+if(INT.active) return 'i:' + placeKeyOf(INT.door);
+return 'out';
+}
 function localMountState(){
 if(CARPET.mounted) return { type: 'carpet', y: CARPET.y, yaw: yaw, pitch: pitch };
 if(mountedHorse){
@@ -24521,13 +25143,16 @@ return mv;
 function localPlayerFormState(){
 return {
 form: localFormId(),
-x: camera.position.x, y: camera.position.y - EYE_HEIGHT, z: camera.position.z,
-yaw: yaw, pitch: pitch,
-mount: localMountState(),
-drawn: !!swordDrawn,
-island: islandIdAt(camera.position.x, camera.position.z),
+place: localPlaceKey(),
+x: ADL_OUT.seatPose ? ADL_OUT.seatPose.x : camera.position.x,
+y: ADL_OUT.seatPose ? outdoorGroundHeight(ADL_OUT.seatPose.x, ADL_OUT.seatPose.z, Infinity) : camera.position.y - EYE_HEIGHT,
+z: ADL_OUT.seatPose ? ADL_OUT.seatPose.z : camera.position.z,
+yaw: ADL_OUT.seatPose ? ADL_OUT.seatPose.yaw : (INT.active ? yaw - interiorCal : yaw), pitch: ADL_OUT.seatPose ? 0 : pitch,
+mount: (INT.active || DUN.active || ADL_OUT.seatPose) ? null : localMountState(),
+drawn: ADL_OUT.seatPose ? false : !!swordDrawn,
+island: (INT.active || DUN.active) ? 0 : islandIdAt(camera.position.x, camera.position.z),
 onMindor: pvpLocalOnMindor(),
-moving: pvpLocalMoving(),
+moving: ADL_OUT.seatPose ? false : pvpLocalMoving(),
 slashing: (pvpNow() - PVP.lastLocalSlashT) < FORM_SLASH_DUR
 };
 }
@@ -24536,7 +25161,7 @@ PVP.lastLocalSlashT = pvpNow();
 PVP.mirrorSlash = true;
 try{
 if(window.PlayerNet && typeof window.PlayerNet.onLocalSlash === 'function'){
-window.PlayerNet.onLocalSlash({ t: PVP.lastLocalSlashT, x: camera.position.x, y: camera.position.y - EYE_HEIGHT, z: camera.position.z, yaw: yaw, onMindor: pvpLocalOnMindor(), mount: localMountState() });
+window.PlayerNet.onLocalSlash({ t: PVP.lastLocalSlashT, place: localPlaceKey(), x: camera.position.x, y: camera.position.y - EYE_HEIGHT, z: camera.position.z, yaw: INT.active ? yaw - interiorCal : yaw, onMindor: pvpLocalOnMindor(), mount: localMountState() });
 }
 }catch(e){ console.error('PlayerNet.onLocalSlash:', e); }
 }
@@ -24546,13 +25171,22 @@ const fadeEl = document.getElementById('deathFade');
 if(fadeEl){ fadeEl.style.display = 'block'; fadeEl.style.opacity = '0'; }
 DUN.deathSeq = { phase: 'hold', t: 0, holdDur: 2.0, startQuat: camera.quaternion.clone(), holdQuat: camera.quaternion.clone(), fov0: camera.fov,
 ifr: null, fadeDur: 1.0, zoomTo: 1.0, drawWorld: false, silent: true, blackHold: 0.6 };
-try{ if(window.PlayerNet && typeof window.PlayerNet.onLocalDeath === 'function') window.PlayerNet.onLocalDeath({ by: byId }); }catch(e){ console.error('PlayerNet.onLocalDeath:', e); }
+try{
+if(window.PlayerNet && typeof window.PlayerNet.onLocalDeath === 'function'){
+window.PlayerNet.onLocalDeath({ by: byId, rem: {
+place: localPlaceKey(), x: camera.position.x, y: camera.position.y - EYE_HEIGHT, z: camera.position.z,
+yaw: INT.active ? yaw - interiorCal : yaw,
+gold: collectedCount,
+heads: { ifrit: collectedHeadTally.ifrit || 0, spriggan: collectedHeadTally.spriggan || 0, bucca: collectedHeadTally.bucca || 0 }
+} });
+}
+}catch(e){ console.error('PlayerNet.onLocalDeath:', e); }
 }
 function pvpOnRemoteSlash(id, info){
 info = info || {};
 const r = REMOTE_PLAYERS.get(id);
 if(r) formSlash(r.fig);
-if(DUN.deathSeq || INT.active || DUN.active) return 'ignored';
+if(DUN.deathSeq) return 'ignored';
 const ax = (info.x !== undefined) ? info.x : (r ? r.x : undefined), az = (info.z !== undefined) ? info.z : (r ? r.z : undefined);
 if(ax === undefined) return 'ignored';
 const aYaw = (info.yaw !== undefined) ? info.yaw : (r ? r.yaw : 0);
@@ -24561,6 +25195,7 @@ if(!(pvpLocalOnMindor() && aMindor)) return 'safe';
 const dx = camera.position.x - ax, dz = camera.position.z - az;
 const dist = Math.hypot(dx, dz);
 if(dist > PVP.range) return 'miss';
+if((INT.active || DUN.active) && info.y !== undefined && Math.abs(info.y - (camera.position.y - EYE_HEIGHT)) > 1.5) return 'miss';
 const fdot = (-Math.sin(aYaw)*dx - Math.cos(aYaw)*dz)/Math.max(0.001, dist);
 if(fdot < PVP.facingDot) return 'miss';
 const at = (info.t !== undefined) ? info.t : pvpNow();
@@ -24577,6 +25212,8 @@ localFormId, localState: localPlayerFormState,
 create: createPlayerForm, update: updatePlayerForm, slash: formSlash,
 spawnRemote: remoteSpawn, updateRemote: remoteUpdate, removeRemote: remoteRemove,
 slashRemote: pvpOnRemoteSlash,
+adella: { onMsg: adlOutOnMsg, onDisconnect: adlOutAbort, onUnload: adlOutUnload },
+remains: { add: remainsAdd, remove: remainsRemove, grant: remainsOnGrant, gone: remainsOnGone, clear: remainsClear },
 players: REMOTE_PLAYERS,
 pvp: PVP
 };
@@ -25334,14 +25971,18 @@ const hudStakeEl = document.getElementById('hud-stake');
 let hudStakeShown = null;
 function syncStakeHud(){
 const I = INT.I;
-const inShop = !!(INT.active && I && I.isBetting);
-const val = inShop ? (I.adlStake || 0) : null;
-if(val === hudStakeShown) return;
-hudStakeShown = val;
-if(val === null){
+let txt = null;
+if(INT.active && I && I.isBetting) txt = 'Stake: ' + (I.adlStake || 0) + 'K';
+else if(adlOutLocked()){
+const o = ADL_OUT.cur;
+txt = (!ADL_OUT.oppSeated) ? 'Waiting for a challenger' : ('Stake: ' + (o.adlStake || 0) + 'K');
+}
+if(txt === hudStakeShown) return;
+hudStakeShown = txt;
+if(txt === null){
 hudStakeEl.style.display = 'none';
 } else {
-hudStakeEl.textContent = 'Stake: ' + val + 'K';
+hudStakeEl.textContent = txt;
 hudStakeEl.style.display = 'block';
 }
 }
@@ -27070,6 +27711,12 @@ collectedHeadTally.ifrit = 0; collectedHeadTally.spriggan = 0; collectedHeadTall
 updateCollectedLabel();
 const restoreFov = (ds.ifr && ds.ifr.baseFov !== undefined) ? ds.ifr.baseFov : ds.fov0;
 if(restoreFov !== undefined){ camera.fov = restoreFov; camera.updateProjectionMatrix(); }
+if(INT.active){
+try{ exitBuilding(); }catch(e){ console.error('death exit:', e); }
+exitFadeStart = -Infinity;
+const ef = document.getElementById('exitFade');
+if(ef){ ef.style.display = 'none'; ef.style.opacity = '0'; }
+}
 exitDungeon();
 if(mountedHorse){
 const deathAi = mountedHorse.userData.ai;
@@ -27743,6 +28390,9 @@ const dt = Math.min(clock.getDelta(), 0.05);
 VP.dt = dt;
 updateDroppingSwords(dt);
 const t = clock.elapsedTime;
+try{ remoteTick(dt); }catch(e){ console.error('remote players:', e); }
+try{ adlOutTick(dt); }catch(e){ console.error('adella tables:', e); }
+try{ remainsTick(dt); }catch(e){ console.error('remains:', e); }
 syncStakeHud();
 syncHeadsHud();
 boatTutorialTick();
@@ -27932,7 +28582,6 @@ break;
 try{ wagonFrame(dt, t); }catch(e){ console.error('wagon frame:', e); }
 try{ carpetTick(dt, t); }catch(e){ console.error('carpet:', e); }
 try{ moonTick(dt, t); }catch(e){ console.error('moon:', e); }
-try{ remoteTick(dt); }catch(e){ console.error('remote players:', e); }
 const moveMult1 = moveIntentMultiplier();
 if(boardedBoat){
 if(moveMult1 !== 0){
@@ -28370,7 +29019,7 @@ updateEquippedSwordFrame(dt);
 renderReflection();
 shadowFrameToggle = !shadowFrameToggle;
 if(shadowFrameToggle) renderer.shadowMap.needsUpdate = true;
-renderView(scene, camera);
+renderView(scene, adlOutLocked() ? adlOutSeatCam() : camera);
 }
 animate();
 requestAnimationFrame(()=>{
@@ -28484,7 +29133,7 @@ function connect(){
     let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     switch(m.type){
       case 'welcome':
-        myId = m.id; count = m.count || 1; clearRemotes();
+        myId = m.id; count = m.count || 1; clearRemotes(); try{ PF().remains.clear(); }catch(e){}
         (m.players || []).forEach(p => setTarget(p.id, p.s));
         setHud('online'); break;
       case 'join': setTarget(m.id, m.s); break;
@@ -28492,16 +29141,34 @@ function connect(){
       case 'leave':
         remotes.delete(m.id); try{ PF().removeRemote(m.id); }catch(e){} break;
       case 'count': count = m.n; setHud('online'); break;
+      case 'roster':
+        if(Array.isArray(m.ids)){
+          const live = new Set(m.ids);
+          for(const id of Array.from(remotes.keys())) if(!live.has(id)){ remotes.delete(id); try{ PF().removeRemote(id); }catch(e){} }
+          count = m.ids.length; setHud('online');
+        } break;
       case 'slash': onRemoteSlash(m.id, m.p || {}); break;
       case 'killed': toast(m.by === myId ? 'You struck a player down' : 'A player has fallen'); break;
       case 'pong': if(typeof m.c === 'number'){ const s = (performance.now() - m.c)/1000; if(s > 0 && s < 5) rtt = rtt*0.7 + s*0.3; } break;
+      case 'adl-seat': case 'adl-denied': case 'adl-opp': case 'adl-start': case 'adl-act': case 'adl-forfeit':
+        try{ PF().adella.onMsg(m); }catch(e){ console.error('adella msg:', e); } break;
+      case 'corpse': try{ PF().remains.add(m.c); }catch(e){} break;
+      case 'corpses': try{ (m.list || []).forEach(c => PF().remains.add(c)); }catch(e){} break;
+      case 'corpse-gone': try{ PF().remains.remove(m.id); }catch(e){} break;
+      case 'loot-grant': try{ PF().remains.grant(m); }catch(e){} break;
+      case 'loot-gone': try{ PF().remains.gone(m); }catch(e){} break;
       case 'full': toast('Server full – playing offline'); closedByUs = true; break;
     }
   };
-  ws.onclose = () => { clearRemotes(); myId = null; setHud('offline'); if(!closedByUs) scheduleRetry(); };
+  ws.onclose = () => { try{ PF().adella.onDisconnect(); PF().remains.clear(); }catch(e){} clearRemotes(); myId = null; setHud('offline'); if(!closedByUs) scheduleRetry(); };
   ws.onerror = () => { try{ ws.close(); }catch(e){} };
 }
 function scheduleRetry(){ retry = Math.min(retry + 1, 6); setTimeout(connect, Math.min(15000, 800*Math.pow(2, retry - 1))); }
+/* clean disconnect when the tab closes / is discarded, so others see us leave instantly */
+function bye(){ try{ PF().adella.onUnload(); }catch(e){} closedByUs = true; try{ ws && ws.close(1000, 'bye'); }catch(e){} }
+window.addEventListener('pagehide', (e) => { if(!e.persisted) bye(); });
+window.addEventListener('beforeunload', bye);
+window.addEventListener('pageshow', (e) => { if(e.persisted && (!ws || ws.readyState > 1)){ retry = 0; connect(); } });
 function tx(obj){ if(ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 function sendPing(){ tx({ type: 'ping', c: performance.now() }); }
 setInterval(sendPing, PING_MS);
@@ -28510,6 +29177,8 @@ setInterval(sendPing, PING_MS);
 function onRemoteSlash(id, p){
   const f = PF(); if(!f) return;
   const info = Object.assign({}, p, { t: performance.now()/1000 - rtt/2 });
+  let mine = 'out'; try{ mine = f.localState().place; }catch(e){}
+  if((p.place || 'out') !== mine) info.onMindor = false;   // different world: animation only, no hit
   try{ f.slashRemote(id, info); }catch(e){ console.error('slashRemote:', e); }
 }
 
@@ -28524,8 +29193,9 @@ setInterval(() => {
 }, SEND_MS);
 
 window.PlayerNet = {
+  sendRaw(o){ tx(o); },
   onLocalSlash(payload){ tx({ type: 'slash', p: payload }); },
-  onLocalDeath(info){ tx({ type: 'death', by: info && info.by }); },
+  onLocalDeath(info){ tx({ type: 'death', by: info && info.by, rem: info && info.rem }); },
   get id(){ return myId; }
 };
 
@@ -28538,12 +29208,12 @@ function frame(){
   const k = 1 - Math.exp(-dt*14);
   for(const [id, r] of remotes){
     const c = r.cur, t = r.tgt;
-    if(r.fresh || Math.hypot(t.x - c.x, t.z - c.z) > 25){ Object.assign(c, t); r.fresh = false; }
+    if(r.fresh || t.place !== c.place || Math.hypot(t.x - c.x, t.z - c.z) > 25){ Object.assign(c, t); r.fresh = false; }
     else {
       c.x += (t.x - c.x)*k; c.z += (t.z - c.z)*k;
       if(t.y !== undefined) c.y = (c.y === undefined) ? t.y : c.y + (t.y - c.y)*k;
       if(t.yaw !== undefined) c.yaw = (c.yaw === undefined) ? t.yaw : c.yaw + angDiff(c.yaw, t.yaw)*k;
-      c.pitch = t.pitch; c.form = t.form; c.mount = t.mount; c.drawn = t.drawn; c.moving = t.moving; c.onMindor = t.onMindor;
+      c.pitch = t.pitch; c.place = t.place; c.form = t.form; c.mount = t.mount; c.drawn = t.drawn; c.moving = t.moving; c.onMindor = t.onMindor;
     }
     try{ f.updateRemote(id, c); }catch(e){ console.error('updateRemote:', e); }
   }
