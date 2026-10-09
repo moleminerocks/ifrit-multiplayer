@@ -261,7 +261,7 @@ wss.on('connection', (ws) => {
     broadcast({ type: 'count', n: players.size });
   };
   ws.on('close', drop);
-  ws.on('error', drop);
+  ws.on('error', drop); 
 });
 
 // Batched snapshots: one message per client containing only players that changed.
