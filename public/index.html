@@ -498,7 +498,7 @@ const SOUND_PRELOAD_PLAN = {
 'eh.mp3':1, 'uh.mp3':1, 'who.mp3':1, 'what.mp3':1, 'help.mp3':1, 'draw.mp3':1, 'crunch.mp3':1, 'creak.mp3':1,
 'knock.mp3':1, 'tock.mp3':1, 'sail.mp3':1, 'snap.mp3':1, 'jangle.mp3':1, 'jingle.mp3':1, 'dundun.mp3':1,
 'fountain.mp3':1, 'swipe.mp3':5, 'water.mp3':7,
-'dunes.mp3':2, 'village.mp3':2, 'oasis.mp3':2, 'dungeon.mp3':2, 'tempest.mp3':2, 'trot.mp3':2, 'harp.mp3':2,
+'dunes.mp3':2, 'village.mp3':2, 'oasis.mp3':2, 'dungeon.mp3':2, 'tempest.mp3':2, 'trot.mp3':2, 'harp.mp3':2, 'harp2.mp3':1, 'warchant.mp3':1,
 'cheer.mp3':2, 'disco.mp3':2, 'sanctuary.mp3':1, 'book.mp3':1, '1.mp3':1, '2.mp3':1, '3.mp3':1, '4.mp3':1, '5.mp3':1, '6.mp3':1, '7.mp3':1, 'sultan.mp3':1, 'queen.mp3':1, 'queen2.mp3':1, 'marid.mp3':1, 'marid2.mp3':1, 'king.mp3':1, 'ting.mp3':1, 'ching.mp3':1
 };
 const STORY_SOUND_NAMES = ['5.mp3', '6.mp3', '7.mp3', 'sultan.mp3', 'queen.mp3', 'queen2.mp3', 'marid.mp3', 'marid2.mp3', 'king.mp3'];
@@ -2703,11 +2703,31 @@ reflectCam.far = Math.min(reflectCam.far, 150);
 reflectCam.updateProjectionMatrix();
 reflectCam.updateMatrixWorld();
 renderer.clippingPlanes = [waterClipPlane];
+/* the moon sits beyond the mirror camera's far plane: draw a nearer, proportionally smaller copy for the reflection,
+   and leave out its glow (the sea mirrors the moon object only) */
+let moonRestore = null;
+if(typeof MOON !== 'undefined' && MOON.active && MOON.mesh && MOON.group && MOON.group.visible){
+const mm = MOON.mesh, gg = MOON.glow;
+moonRestore = { px: mm.position.x, py: mm.position.y, pz: mm.position.z, s: mm.scale.x, glow: gg ? gg.visible : false };
+const mwx = mm.position.x + MOON.offX, mwy = mm.position.y, mwz = mm.position.z + MOON.offZ;
+const mdx = mwx - reflectCam.position.x, mdy = mwy - reflectCam.position.y, mdz = mwz - reflectCam.position.z;
+const mdist = Math.hypot(mdx, mdy, mdz) || 1, MD = 130;
+if(mdist > MD){
+mm.position.set(reflectCam.position.x + mdx/mdist*MD - MOON.offX, reflectCam.position.y + mdy/mdist*MD, reflectCam.position.z + mdz/mdist*MD - MOON.offZ);
+mm.scale.setScalar(moonRestore.s*MD/mdist);
+}
+if(gg) gg.visible = false;
+}
 renderer.setRenderTarget(reflectRT);
 renderer.clear();
 renderer.render(scene, reflectCam);
 renderer.setRenderTarget(null);
 renderer.clippingPlanes = [];
+if(moonRestore){
+MOON.mesh.position.set(moonRestore.px, moonRestore.py, moonRestore.pz);
+MOON.mesh.scale.setScalar(moonRestore.s);
+if(MOON.glow) MOON.glow.visible = moonRestore.glow;
+}
 for(const d of activeWaterDiscs) d.visible = (d.userData.cullVisible !== false);
 for(const s of activeSeaMeshes) s.visible = (s.userData.cullVisible !== false);
 for(const b of mirrorHidden) b.visible = true;
@@ -3625,12 +3645,15 @@ function vpReset(mode){ VP.air = false; VP.vy = 0; if(mode) VP.mode = mode; }
 function vpEye(target, dt, mode){
 let y = camera.position.y;
 const x = camera.position.x, z = camera.position.z;
+const prevT = (VP.lt === undefined) ? target : VP.lt;
+VP.lt = target;
 if(VP.mode !== mode || Math.hypot(x - VP.lx, z - VP.lz) > 2.5){
 vpReset(mode); VP.lx = x; VP.lz = z; return target;
 }
 VP.lx = x; VP.lz = z;
 dt = Math.min(dt, 0.05);
 const d = target - y;
+const slopeRun = Math.abs(target - prevT) < 0.2;   /* ground rising gradually under us (steep slope / stairs), not a sudden step */
 if(mountedHorse && mode === 'out'){
 VP.air = false; VP.vy = 0; VP.peak = undefined;
 let yh = y + d*(1 - Math.exp(-dt*(d > 0 ? 28 : 18)));
@@ -3642,6 +3665,12 @@ if(Math.abs(d) <= 0.01) return target;
 if(d > 0){
 if(d <= VP_STEP){
 return y + d*(1 - Math.exp(-dt*VP_SMOOTH));
+}
+if(slopeRun){
+/* climbing a steep slope or stair: follow the ground tightly instead of hopping, and never dip under it */
+let yn = y + d*(1 - Math.exp(-dt*34));
+if(yn < target - 0.25) yn = target - 0.25;
+return yn;
 }
 VP.air = true; VP.peak = y;
 VP.vy = Math.sqrt(2*VP_G*(d + VP_JUMP_CLEAR));
@@ -3655,6 +3684,7 @@ VP.vy = 0;
 }
 VP.vy = Math.max(VP.vy - VP_G*dt, -VP_MAX_FALL);
 y += VP.vy*dt;
+if(y < target - 0.3) y = target - 0.3;   /* the eye must never sink into rising ground mid-hop */
 if(VP.peak === undefined || y > VP.peak) VP.peak = y;
 if(VP.vy <= 0 && y <= target){
 if(target - y > VP_STEP && VP.vy > -2){
@@ -4043,6 +4073,11 @@ const collectedHeadTally = { ifrit: 0, spriggan: 0, bucca: 0 };
 const stashedHeadTally = { ifrit: 0, spriggan: 0, bucca: 0 };
 const clearedDungeons = {};
 const dungeonCaptives = {};
+/* what is left in each dungeon: { init, orn, tre, ruby, sapph, paint }, kept between visits and saved */
+const dungeonLoot = {};
+/* paintings the player holds: carried ones ({n, k: dungeon they came from}) are banked with the gold; stashed ones hang in owned abodes */
+const carriedPaintings = [];
+const stashedPaintings = [];
 const slainCreatures = { bucca: {}, spriggan: {} };
 function posKey(x, z){ return Math.round(x)+','+Math.round(z); }
 function isDungeonCleared(cx, cz){ return !!clearedDungeons[posKey(cx, cz)]; }
@@ -4183,6 +4218,9 @@ lastAbode,
 respawnAtCastle,
 heads: collectedHeadTally,
 clearedDungeons,
+dungeonLoot,
+carriedPaintings: (playerHouse || (respawnAtCastle && ownedCastleKey)) ? [] : carriedPaintings,
+stashedPaintings,
 dungeonCaptives,
 slainCreatures,
 stashedHeads: stashedHeadTally,
@@ -4251,6 +4289,9 @@ CARPET.fell = !!savedGame.carpetFell; CARPET.owned = !!savedGame.carpetOwned; if
 if(savedGame.heads) Object.assign(collectedHeadTally, savedGame.heads);
 if(savedGame.stashedHeads) Object.assign(stashedHeadTally, savedGame.stashedHeads);
 if(savedGame.clearedDungeons) Object.assign(clearedDungeons, savedGame.clearedDungeons);
+if(savedGame.dungeonLoot) Object.assign(dungeonLoot, savedGame.dungeonLoot);
+if(Array.isArray(savedGame.carriedPaintings)) for(const c of savedGame.carriedPaintings) if(c && c.n >= 1 && c.n <= 38) carriedPaintings.push({ n: c.n | 0, k: String(c.k || '') });
+if(Array.isArray(savedGame.stashedPaintings)) for(const n of savedGame.stashedPaintings) if(n >= 1 && n <= 38) stashedPaintings.push(n | 0);
 if(savedGame.dungeonCaptives) Object.assign(dungeonCaptives, savedGame.dungeonCaptives);
 if(savedGame.slainCreatures){
 if(savedGame.slainCreatures.bucca) Object.assign(slainCreatures.bucca, savedGame.slainCreatures.bucca);
@@ -10399,10 +10440,7 @@ if(st.winner === 'player'){
 collectedCount += stake;
 playVoiceLine('ching.mp3', 0.45);
 } else {
-const fromCarried = Math.min(collectedCount, stake);
-collectedCount -= fromCarried;
-const rest = stake - fromCarried;
-if(rest > 0) stashCount = Math.max(0, stashCount - rest);
+spendGold(stake);
 }
 updateCollectedLabel();
 saveGame();
@@ -10444,8 +10482,8 @@ m.traverse(o=>{ if(o.isMesh && o.geometry) o.geometry.dispose(); });
 I.adlStakeMeshes = [];
 const stake = I.adlStake || 0;
 if(stake <= 0) return;
-const treasures = Math.floor(stake/10);
-const ornaments = stake - treasures*10;
+const treasures = Math.min(40, Math.floor(stake + 1e-6));
+const ornaments = Math.min(9, Math.round((stake - Math.floor(stake + 1e-6))*10));
 const scene2 = I.scene;
 const ORN_SCALE = 0.18;
 let ornR = 0.02, ornH = 0.03;
@@ -10741,10 +10779,7 @@ function adlNetAct(I, a){
 adlNetSend({ type: 'adl-act', table: I.table.id, gameId: ADL_OUT.gameId, a: a });
 }
 function adlLoseStake(stake){
-const fromCarried = Math.min(collectedCount, stake);
-collectedCount -= fromCarried;
-const rest = stake - fromCarried;
-if(rest > 0) stashCount = Math.max(0, stashCount - rest);
+spendGold(stake);
 updateCollectedLabel();
 saveGame();
 }
@@ -10762,6 +10797,20 @@ tg.rotation.y = face;
 parent.add(tg);
 I.group = tg;
 const bg = addBettingFurnishings(I, { parent: tg, tableZ: 0, mat: granite ? graniteMat : sandstoneMat, noLight: true });
+{
+/* sink the base into the terrain so the table never floats on a slope */
+let minH = gy;
+for(const sx of [-1, 1]) for(const sz of [-1, 1]){
+const lx = sx*1.08, lz = sz*0.33;
+const h2 = terrainHeight(wx + lx*Math.cos(face) + lz*Math.sin(face), wz - lx*Math.sin(face) + lz*Math.cos(face));
+if(h2 < minH) minH = h2;
+}
+const depth = Math.max(0.6, gy - minH + 0.5);
+const baseMesh = new THREE.Mesh(new THREE.BoxGeometry(2.30*0.94, depth, 0.74*0.88), granite ? graniteMat : sandstoneMat);
+baseMesh.position.set(0, 0.05 - depth/2, 0);
+baseMesh.castShadow = true; baseMesh.receiveShadow = true;
+tg.add(baseMesh);
+}
 adlBuildPieces(I, bg);
 const t = { id: 'adl:' + Math.round(wx) + ',' + Math.round(wz), I: I, group: tg, x: wx, z: wz, face: face, gy: gy };
 I.table = t;
@@ -10810,8 +10859,8 @@ I.adlStakeMeshes = [];
 const stake = I.adlStake || 0;
 if(stake <= 0) return;
 const tg = I.group;
-const treasures = Math.floor(stake/10);
-const ornaments = stake - treasures*10;
+const treasures = Math.min(40, Math.floor(stake + 1e-6));
+const ornaments = Math.min(9, Math.round((stake - Math.floor(stake + 1e-6))*10));
 const ORN_SCALE = 0.18;
 let ornR = 0.02, ornH = 0.03;
 ORNAMENT_LATHE_KEYS.forEach(k => {
@@ -11123,6 +11172,7 @@ return (r.place === 'out') ? outdoorGroundHeight(x, z, r.y + 1.2) : r.y;
 function remainsAdd(c){
 if(!c || !c.id || REMAINS.has(c.id)) return;
 const now = performance.now()/1000;
+if((c.place || 'out') === 'out'){ const w = wrapNearCamera(c.x, c.z); c = Object.assign({}, c, { x: w[0], z: w[1] }); }
 const r = { id: c.id, victim: c.victim, place: c.place || 'out', x: c.x, y: c.y, z: c.z, yaw: c.yaw || 0,
 items: (c.items || []).slice(), born: now - (c.age || 0), showAt: 0, fig: null, sack: null,
 itemMeshes: new Map(), revealed: false, open: 0, revealT: 0 };
@@ -11158,8 +11208,10 @@ applySkeletonCrumple(skel);
 const fresh = (now - r.born) < 4;
 skel.position.set(r.x, remainsGroundY(r, r.x, r.z) + (fresh ? 0.45 : 0.05), r.z);
 skel.rotation.y = r.yaw + Math.PI*0.5;
-const gfn = (r.place === 'out') ? ((x, z, y) => outdoorGroundHeight(x, z, y)) : (() => r.y);
-buildSkeletonRagdoll(skel, gfn, null, true);
+const inDun = (typeof r.place === 'string' && r.place.charAt(0) === 'd');
+const gfn = (r.place === 'out') ? ((x, z, y) => outdoorGroundHeight(x, z, y))
+: (inDun ? ((x, z) => { const h = dunFloorHeight(x, z); return isFinite(h) ? h : r.y; }) : (() => r.y));
+buildSkeletonRagdoll(skel, gfn, inDun ? dunWallPush : null, true);
 if(!fresh){ for(let i = 0; i < 160; i++) updateSkeletonRagdoll(skel, 0.033); }
 r.fig = skel;
 }
@@ -11170,7 +11222,7 @@ if(r.sack){ remainsDisposeObj(r.sack.group); r.sack = null; }
 }
 function remainsOnGrant(m){
 if(!m) return;
-const g = (m.gold | 0), hd = m.heads || {};
+const g = (m.gold | 0)/10, hd = m.heads || {};
 if(g > 0) collectedCount += g;
 for(const k of ['ifrit','spriggan','bucca']){
 const n = (hd[k] | 0);
@@ -11252,6 +11304,782 @@ adlNetSend({ type: 'loot-take', corpse: d.corpse });
 }
 }
 /* ================= end remains ================= */
+/* ================= PAINTINGS: 38 jpegs (1.jpeg ... 38.jpeg next to the audio files), gold bevelled frames =================
+   Houses / riads / castle keeps get a fixed selection per place (seeded from the building's position);
+   one small painting hangs on a dungeon wall: drag it off, drop it (it falls, lies face-up or leans on a wall) or collect it (+10). */
+const PAINT_SPECS = (function(){
+const s = [null];
+for(let n = 1; n <= 18; n++) s[n] = [0.3, 0.5];
+for(let n = 19; n <= 25; n++) s[n] = [0.5, 0.3];
+s[26] = [0.3, 0.3]; s[27] = [0.3, 0.3];
+s[28] = [1.5, 2.0];
+for(let n = 29; n <= 35; n++) s[n] = [2.0, 1.5];
+s[36] = [2.0, 1.1];
+s[37] = [1.9, 1.5];
+s[38] = [4.0, 4.0];
+return s;
+})();
+const PAINT_SMALL = [], PAINT_BIG = [];
+for(let n = 1; n <= 38; n++) (n <= 27 ? PAINT_SMALL : PAINT_BIG).push(n);
+const PAINT_TEX = new Map();
+const PAINT_EXTS = ['.jpeg', '.jpg', '.JPEG', '.JPG'];
+function paintTexture(n){
+let rec = PAINT_TEX.get(n);
+if(rec) return rec;
+rec = { tex: null, mats: [] };
+PAINT_TEX.set(n, rec);
+const loader = new THREE.TextureLoader();
+const tryExt = (k) => {
+if(k >= PAINT_EXTS.length) return;   /* no image file: keep the placeholder canvas, no warning */
+loader.load(n + PAINT_EXTS[k], (tex) => {
+tex.encoding = THREE.sRGBEncoding;
+tex.anisotropy = 4;
+rec.tex = tex;
+for(const m of rec.mats){ m.map = tex; m.emissiveMap = tex; m.color.set(0xffffff); m.emissive.set(0xffffff); m.emissiveIntensity = 0.16; m.needsUpdate = true; }
+}, undefined, () => tryExt(k + 1));
+};
+tryExt(0);
+return rec;
+}
+function paintCanvasMat(n){
+const rec = paintTexture(n);
+const m = new THREE.MeshStandardMaterial({ color: 0x8a7458, roughness: 0.85, metalness: 0, emissive: 0x4a3b2a, emissiveIntensity: 0.45 });
+if(rec.tex){ m.map = rec.tex; m.emissiveMap = rec.tex; m.color.set(0xffffff); m.emissive.set(0xffffff); m.emissiveIntensity = 0.16; }
+else rec.mats.push(m);
+return m;
+}
+const PAINT_FRAME_CACHE = new Map();
+let _paintBackMat = null;
+function paintRingGeo(ow, oh, iw, ih, depth, bev){
+const shape = new THREE.Shape();
+const ox = ow/2 - bev, oy = oh/2 - bev;
+shape.moveTo(-ox, -oy); shape.lineTo(ox, -oy); shape.lineTo(ox, oy); shape.lineTo(-ox, oy); shape.lineTo(-ox, -oy);
+const hole = new THREE.Path();
+const ix = iw/2 + bev, iy = ih/2 + bev;
+hole.moveTo(-ix, -iy); hole.lineTo(-ix, iy); hole.lineTo(ix, iy); hole.lineTo(ix, -iy); hole.lineTo(-ix, -iy);
+shape.holes.push(hole);
+return new THREE.ExtrudeGeometry(shape, { depth: Math.max(0.001, depth - 2*bev), bevelEnabled: true, bevelThickness: bev, bevelSize: bev, bevelSegments: 2, steps: 1 });
+}
+/* geometry set for one painting size (shared between instances) */
+function paintFrameParts(w, h){
+const key = w + 'x' + h;
+let P = PAINT_FRAME_CACHE.get(key);
+if(P) return P;
+const b = 0.075*Math.pow(Math.min(w, h), 0.75);
+const parts = [];
+const add = (geo, x, y, z, sx, sy, sz) => parts.push({ geo, x: x||0, y: y||0, z: z||0, sx: sx||1, sy: sy||1, sz: sz||1 });
+/* outer moulding, recessed channel, raised inner lip */
+let g = paintRingGeo(w + 2*b, h + 2*b, w + 2*0.55*b, h + 2*0.55*b, 0.52*b, 0.12*b); add(g, 0, 0, 0.12*b);
+g = paintRingGeo(w + 2*0.62*b, h + 2*0.62*b, w + 2*0.26*b, h + 2*0.26*b, 0.30*b, 0.05*b); add(g, 0, 0, 0.05*b);
+g = paintRingGeo(w + 2*0.30*b, h + 2*0.30*b, w, h, 0.88*b, 0.10*b); add(g, 0, 0, 0.10*b);
+/* corner rosettes and edge bosses */
+const rosette = new THREE.SphereGeometry(0.50*b, 12, 8);
+const cx = w/2 + 0.78*b, cy = h/2 + 0.78*b;
+for(const sx of [-1, 1]) for(const sy of [-1, 1]) add(rosette, sx*cx, sy*cy, 0.62*b, 1, 1, 0.55);
+if(Math.min(w, h) >= 1.0){
+const boss = new THREE.SphereGeometry(0.34*b, 10, 7);
+add(boss, 0, cy, 0.62*b, 1, 1, 0.55); add(boss, 0, -cy, 0.62*b, 1, 1, 0.55);
+add(boss, cx, 0, 0.62*b, 1, 1, 0.55); add(boss, -cx, 0, 0.62*b, 1, 1, 0.55);
+}
+const canvasGeo = new THREE.PlaneGeometry(w, h);
+const backGeo = new THREE.BoxGeometry(w + 0.02, h + 0.02, 0.03);
+P = { b, parts, canvasGeo, backGeo, depth: 0.98*b + 0.02 };
+PAINT_FRAME_CACHE.set(key, P);
+return P;
+}
+/* A painting group: origin at the centre of the picture, the back against the wall, facing +z. */
+function makePainting(n, frameMat){
+const spec = PAINT_SPECS[n]; const w = spec[0], h = spec[1];
+const P = paintFrameParts(w, h);
+const g = new THREE.Group();
+const canvas = new THREE.Mesh(P.canvasGeo, paintCanvasMat(n));
+canvas.position.z = 0.012;
+g.add(canvas);
+if(!_paintBackMat) _paintBackMat = new THREE.MeshStandardMaterial({ color: 0x2a1c12, roughness: 0.9 });
+const back = new THREE.Mesh(P.backGeo, _paintBackMat);
+back.position.z = -0.015;
+g.add(back);
+for(const p of P.parts){
+const m = new THREE.Mesh(p.geo, frameMat || treasureGoldMat);
+m.position.set(p.x, p.y, p.z);
+m.scale.set(p.sx, p.sy, p.sz);
+g.add(m);
+}
+g.userData.paint = { n, w, h, depth: P.depth };
+g.rotation.order = 'YXZ';
+return g;
+}
+function paintDispose(g){
+if(!g) return;
+if(g.parent) g.parent.remove(g);
+g.traverse(o => { if(o.isMesh && o.material && o.material !== treasureGoldMat && o.material !== goldMat && o.material !== _paintBackMat){ o.material.dispose(); } });
+}
+/* ---------- building interiors ---------- */
+function paintBuildingKind(door){
+if(!door || door.isLibrary) return null;
+if(door.isKeep) return door.isCastleKeep ? { kind: 'keep' } : null;   /* castle keeps only, never towers */
+if(door.isPub) return { kind: 'pub', count: 4 };
+const t = door.type; if(!t) return null;
+if(t.riad) return { kind: 'riad', count: 9 };
+if(t.key === 'hut') return { kind: 'house', count: 1 };
+if(t.key === 'cottage' || t.key === 'townhouse' || t.key === 'manor') return { kind: 'house', count: 2 };
+return null;
+}
+/* boxes of furniture / fittings already in the room (individual meshes near the walls), so paintings never hang through them */
+function paintObstacles(scene, W, D, H){
+const out = [], sz = new THREE.Vector3();
+const hw = W/2, hd = D/2;
+scene.updateMatrixWorld(true);
+scene.traverse(o => {
+if(!o.isMesh || !o.visible || !o.geometry) return;
+const bx = new THREE.Box3().setFromObject(o);
+if(bx.isEmpty()) return;
+bx.getSize(sz);
+if(sz.y > 0.8*H) return;
+if(sz.x > 0.85*W && sz.z > 0.85*D) return;
+if(bx.max.y < 0.5) return;
+if(!(bx.min.x < -hw + 0.9 || bx.max.x > hw - 0.9 || bx.min.z < -hd + 0.9 || bx.max.z > hd - 0.9)) return;
+out.push(bx);
+});
+return out;
+}
+function paintHitsObstacle(obst, wl, t0, t1, yc, h){
+if(!obst || !obst.length) return false;
+const nx = Math.sin(wl.yaw), nz = Math.cos(wl.yaw);
+const ax = wl.ox + wl.dx*t0, az = wl.oz + wl.dz*t0, bx2 = wl.ox + wl.dx*t1, bz2 = wl.oz + wl.dz*t1;
+const x0 = Math.min(ax, bx2, ax + nx*0.22, bx2 + nx*0.22), x1 = Math.max(ax, bx2, ax + nx*0.22, bx2 + nx*0.22);
+const z0 = Math.min(az, bz2, az + nz*0.22, bz2 + nz*0.22), z1 = Math.max(az, bz2, az + nz*0.22, bz2 + nz*0.22);
+const y0 = yc - h/2, y1 = yc + h/2;
+const e = 0.03;
+for(const b of obst){
+if(b.max.x < x0 + e || b.min.x > x1 - e) continue;
+if(b.max.z < z0 + e || b.min.z > z1 - e) continue;
+if(b.max.y <= y0 + 0.001 || b.min.y >= y1 - 0.001) continue;
+return true;
+}
+return false;
+}
+function paintShuffle(arr, rng){
+const a = arr.slice();
+for(let i = a.length - 1; i > 0; i--){ const j = Math.floor(rng()*(i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; }
+return a;
+}
+/* wall = { ox, oz, dx, dz, len, yaw, y0 (floor), yTop, excl:[[a,b]...], base:(t0,t1)=>height of whatever is below, fit:(t0,t1)=>height the wall face reaches, minY }
+   Paintings are hung like a curator would: each one goes in the middle of the widest free stretch of wall, so large
+   bare areas get filled first and nothing is shoved into a corner. */
+function paintLevels(wl, h, bigP, rng){
+if(wl.fit || wl.base){
+const out = [], top = wl.yTop || 99;
+const jit = rng()*0.5;
+for(let y = 1.45 + jit; y <= top - h/2 - 0.25; y += 1.5) out.push(y);
+return out;
+}
+const top = wl.yTop || STOREY_H;
+if(bigP) return [Math.max(0.55 + h/2, Math.min(top - 0.25 - h/2, 1.65))];
+return [1.5];
+}
+function paintSlotOK(wl, t, w, h, yc, bigP, obst, placed){
+const t0 = t - w/2, t1 = t + w/2;
+if(wl.excl){ for(const e of wl.excl) if(t1 > e[0] - 0.1 && t0 < e[1] + 0.1) return false; }
+if(wl.fit){
+const top = wl.fit(t0, t1);
+if(yc + h/2 + 0.28 > top || yc - h/2 < (wl.minY !== undefined ? wl.minY : 0.9)) return false;
+} else {
+const base = wl.base ? wl.base(t0, t1) : (wl.y0 || 0);
+if(yc - h/2 < base + (bigP ? 0.5 : 0.9) || yc + h/2 > (wl.yTop || STOREY_H) - 0.25) return false;
+}
+for(const p of placed){
+if(p.wl !== wl) continue;
+if(t1 > p.t0 - 0.4 && t0 < p.t1 + 0.4 && yc + h/2 > p.y0 - 0.3 && yc - h/2 < p.y1 + 0.3) return false;
+}
+return !paintHitsObstacle(obst, wl, t0, t1, yc, h);
+}
+function paintPlaceOnWalls(scene, walls, picks, rng, obst, maxN){
+const placed = [], out = [];
+for(const n of picks){
+if(maxN !== undefined && out.length >= maxN) break;
+const spec = PAINT_SPECS[n], w = spec[0], h = spec[1], bigP = h >= 1.0;
+let best = null;
+for(const wl of walls){
+const half = w/2 + 0.3;
+if(wl.len < 2*half) continue;
+const onWall = placed.filter(p => p.wl === wl).length;
+for(const yc of paintLevels(wl, h, bigP, rng)){
+const lvl = placed.filter(p => p.wl === wl && Math.abs((p.y0 + p.y1)/2 - yc) < 1.2).length;
+let runStart = null, last = null;
+const runs = [];
+for(let t = half; t <= wl.len - half + 1e-6; t += 0.1){
+if(paintSlotOK(wl, t, w, h, yc, bigP, obst, placed)){ if(runStart === null) runStart = t; last = t; }
+else if(runStart !== null){ runs.push([runStart, last]); runStart = null; }
+}
+if(runStart !== null) runs.push([runStart, last]);
+for(const r of runs){
+const score = (r[1] - r[0] + w) - 0.9*onWall - 0.5*lvl + rng()*0.5;
+if(!best || score > best.score) best = { score, wl, t: (r[0] + r[1])/2, yc };
+}
+}
+}
+if(!best) continue;
+const wl = best.wl, t = best.t, yc = best.yc;
+const g = makePainting(n);
+g.position.set(wl.ox + wl.dx*t + Math.sin(wl.yaw)*0.034, yc, wl.oz + wl.dz*t + Math.cos(wl.yaw)*0.034);
+g.rotation.y = wl.yaw;
+scene.add(g);
+out.push(g);
+placed.push({ wl, t0: t - w/2, t1: t + w/2, y0: yc - h/2, y1: yc + h/2 });
+}
+return out;
+}
+/* castle keeps keep the original (random-spot) placement, with extra clearance from corners and the throne plinth treated as floor */
+function paintObstaclesOld(scene, W, D, H){
+const out = [], sz = new THREE.Vector3();
+scene.updateMatrixWorld(true);
+for(const c of scene.children){
+if(c.isLight) continue;
+const bx = new THREE.Box3().setFromObject(c);
+if(bx.isEmpty()) continue;
+bx.getSize(sz);
+if(sz.x > 0.85*W && sz.z > 0.85*D) continue;
+if(sz.y > 0.8*H) continue;
+out.push(bx);
+}
+return out;
+}
+function paintHitsObstacleOld(obst, wl, t0, t1, yc, h){
+if(!obst || !obst.length) return false;
+const nx = Math.sin(wl.yaw), nz = Math.cos(wl.yaw);
+const ax = wl.ox + wl.dx*t0, az = wl.oz + wl.dz*t0, bx2 = wl.ox + wl.dx*t1, bz2 = wl.oz + wl.dz*t1;
+const x0 = Math.min(ax, bx2, ax + nx*0.22, bx2 + nx*0.22), x1 = Math.max(ax, bx2, ax + nx*0.22, bx2 + nx*0.22);
+const z0 = Math.min(az, bz2, az + nz*0.22, bz2 + nz*0.22), z1 = Math.max(az, bz2, az + nz*0.22, bz2 + nz*0.22);
+const y0 = yc - h/2, y1 = yc + h/2;
+const e = 0.03;
+for(const b of obst){
+if(b.max.x < x0 + e || b.min.x > x1 - e) continue;
+if(b.max.z < z0 + e || b.min.z > z1 - e) continue;
+if(b.max.y < y0 || b.min.y > y1) continue;
+return true;
+}
+return false;
+}
+/* wall = { ox, oz, dx, dz, len, yaw, y0 (floor/base height), yTop (max centre), excl:[[a,b]...], base:(t)=>baseY, fit:(t0,t1)=>maxTopY } */
+function paintPlaceOnWallsOld(scene, walls, picks, rng, obst){
+const placed = new Map();
+const out = [];
+for(const n of picks){
+const spec = PAINT_SPECS[n], w = spec[0], h = spec[1];
+const tot = walls.reduce((s, wl) => s + Math.max(0, wl.len), 0);
+let done = false;
+for(let attempt = 0; attempt < 60 && !done; attempt++){
+let r = rng()*tot, wl = walls[0];
+for(const c of walls){ r -= Math.max(0, c.len); if(r <= 0){ wl = c; break; } }
+const margin = (wl.margin !== undefined ? wl.margin : 0.28) + w/2;
+if(wl.len < 2*margin) continue;
+const t = margin + rng()*(wl.len - 2*margin);
+const t0 = t - w/2, t1 = t + w/2;
+if(wl.excl && wl.excl.some(e => t1 > e[0] - 0.1 && t0 < e[1] + 0.1)) continue;
+const list = placed.get(wl) || [];
+if(list.some(p => t1 > p[0] - 0.3 && t0 < p[1] + 0.3)) continue;
+const base = wl.base ? wl.base(t0, t1) : (wl.y0 || 0);
+let yc;
+const bigP = h >= 1.0;
+if(wl.fit){
+const top = wl.fit(t0, t1);
+const mn = (typeof wl.minY === 'function') ? wl.minY(t0, t1, bigP) : (wl.minY !== undefined ? wl.minY : 0.9);
+const lo = mn + h/2, hi = top - 0.28 - h/2;
+if(hi < lo) continue;
+yc = lo + rng()*(hi - lo);
+} else {
+const lo = base + (bigP ? 0.55 : 0.95) + h/2, hi = Math.min(wl.yTop - 0.25 - h/2, base + (bigP ? 1.15 : 1.9) + h/2);
+if(hi < lo) continue;
+yc = bigP ? lo + rng()*(hi - lo) : Math.min(hi, Math.max(lo, base + 1.5));
+}
+if(paintHitsObstacleOld(obst, wl, t0, t1, yc, h)) continue;
+const g = makePainting(n);
+const px = wl.ox + wl.dx*t + Math.sin(wl.yaw)*0.034, pz = wl.oz + wl.dz*t + Math.cos(wl.yaw)*0.034;
+g.position.set(px, yc, pz);
+g.rotation.y = wl.yaw;
+scene.add(g);
+out.push(g);
+list.push([t0, t1]); placed.set(wl, list);
+done = true;
+}
+}
+return out;
+}
+/* hanging spots for castle keeps (interior coordinates, 12.8 m keep): k = S small, L large, X large that can take the 4 x 4 */
+const CASTLE_PAINT_SLOTS = [
+{ k: 'L', x: 1.18, y: 17, z: -6.29, yaw: 0 },
+{ k: 'L', x: 4.42, y: 2.61, z: -1.68, yaw: -Math.PI/2 },
+{ k: 'S', x: 2.73, y: 2.83, z: -4.42, yaw: 0 },
+{ k: 'X', x: -2.52, y: 1.93, z: 6.29, yaw: Math.PI, xx: -3.6, xy: 2.75 },
+{ k: 'L', x: -0.13, y: 5.22, z: -4.42, yaw: 0 },
+{ k: 'L', x: -6.29, y: 8.2, z: -0.41, yaw: Math.PI/2 },
+{ k: 'S', x: 1.9, y: 1.7, z: 6.29, yaw: Math.PI },
+{ k: 'L', x: 4.42, y: 2, z: 3.15, yaw: -Math.PI/2 },
+{ k: 'L', x: -4.42, y: 2.78, z: -1.73, yaw: Math.PI/2 },
+{ k: 'S', x: 6.29, y: 18.59, z: -5.31, yaw: -Math.PI/2 },
+{ k: 'S', x: 5.52, y: 18.47, z: -6.29, yaw: 0 },
+{ k: 'S', x: -5.48, y: 10.04, z: -6.29, yaw: 0 },
+{ k: 'S', x: -2.14, y: 2.45, z: -4.42, yaw: 0 },
+{ k: 'S', x: -6.29, y: 1.89, z: 5.38, yaw: Math.PI/2 },
+{ k: 'S', x: -6.29, y: 9.73, z: -5.47, yaw: Math.PI/2 },
+{ k: 'S', x: 3.2, y: 1.67, z: 6.29, yaw: Math.PI },
+{ k: 'S', x: 4.42, y: 1.9, z: 0.75, yaw: -Math.PI/2 }
+];
+function addInteriorPaintings(I, door){
+const spec = paintBuildingKind(door);
+if(!spec || !I || !I.scene) return;
+const kx = (door.houseX !== undefined ? door.houseX : door.cx) || 0, kz = (door.houseZ !== undefined ? door.houseZ : door.cz) || 0;
+const rng = makeRng(((Math.round(kx*10))*73856093) ^ ((Math.round(kz*10))*19349663) ^ 0x51ed270b);
+for(let i = 0; i < 5; i++) rng();
+const scene = I.scene, w = I.w, d = I.d, hw = w/2, hd = d/2;
+const obst = paintObstacles(scene, w, d, I.h || STOREY_H);
+const mine = !!(door.owned || door.playerOwned);   /* your own abode hangs only the paintings you have stashed */
+const myPicks = () => stashedPaintings.filter(q => q !== 38);
+const smalls = paintShuffle(PAINT_SMALL, rng), bigs = paintShuffle(PAINT_BIG, rng);
+const takePicks = (count, bigCount) => {
+const picks = [];
+const bigsOK = bigs.filter(q => q !== 38);   /* the 4 x 4 is for castle keeps only */
+for(let i = 0; i < bigCount; i++) picks.push(bigsOK[i]);
+for(let i = 0; i < count - bigCount; i++) picks.push(smalls[i]);
+return paintShuffle(picks, rng);
+};
+if(spec.kind === 'pub'){
+const H = STOREY_H;
+const back = { ox: -hw, oz: -hd + 0.075, dx: 1, dz: 0, len: w, yaw: 0, y0: 0, yTop: H, excl: [] };
+const front = { ox: hw, oz: hd - 0.075, dx: -1, dz: 0, len: w, yaw: Math.PI, y0: 0, yTop: H, excl: [[hw - 1.0, hw + 1.0], [0.1, 2.0], [w - 2.0, w - 0.1]] };
+const left = { ox: -hw + 0.075, oz: -hd, dx: 0, dz: 1, len: d, yaw: Math.PI/2, y0: 0, yTop: H, excl: [] };
+const right = { ox: hw - 0.075, oz: hd, dx: 0, dz: -1, len: d, yaw: -Math.PI/2, y0: 0, yTop: H, excl: [] };
+paintPlaceOnWalls(scene, [back, front, left, right], mine ? myPicks() : takePicks(spec.count, 0), rng, obst, spec.count);
+return;
+}
+if(spec.kind === 'house' || spec.kind === 'riad'){
+const riad = spec.kind === 'riad';
+const T2 = riad ? 0.175 : 0.075;
+const H = riad ? STOREY_H : (I.h || STOREY_H);
+const doorW = riad ? 1.4 : 1.1;
+const swordX = [hw - 0.2, hw + 1.7];   /* only owned homes hang stored swords on the back wall */
+const walls = [];
+const back = { ox: -hw, oz: -hd + T2, dx: 1, dz: 0, len: w, yaw: 0, y0: 0, yTop: H, excl: (door.owned || door.playerOwned) ? [swordX] : [] };
+const front = { ox: hw, oz: hd - T2, dx: -1, dz: 0, len: w, yaw: Math.PI, y0: 0, yTop: H, excl: [[hw - doorW/2 - 0.3, hw + doorW/2 + 0.3]] };
+const left = { ox: -hw + T2, oz: -hd, dx: 0, dz: 1, len: d, yaw: Math.PI/2, y0: 0, yTop: H, excl: [] };
+const right = { ox: hw - T2, oz: hd, dx: 0, dz: -1, len: d, yaw: -Math.PI/2, y0: 0, yTop: H, excl: [] };
+const mws = (door.inMoor && door.moorWindows) ? door.moorWindows : [];
+for(const mw of mws){
+const S = (mw.size || 0.8)/2 + 0.3;
+if(mw.sz > 0) front.excl.push([hw - (mw.wx + S), hw - (mw.wx - S)]);
+else back.excl.push([mw.wx - S + hw, mw.wx + S + hw]);
+}
+if(riad){
+for(const sw of [left, right]){ const zc = -d*0.25; sw.excl.push(sw === left ? [zc + hd - 1.0, zc + hd + 1.0] : [hd - (zc + 1.0), hd - (zc - 1.0)]); }
+} else if(!door.inMoor){
+left.excl.push([hd - 0.9, hd + 0.9]); right.excl.push([hd - 0.9, hd + 0.9]);
+}
+walls.push(back, front, left, right);
+const count = spec.count;
+const picks = mine ? myPicks() : (riad ? takePicks(count, 4) : takePicks(count, 0));
+paintPlaceOnWalls(scene, walls, picks, rng, obst, count);
+return;
+}
+/* castle keep: a curated set of hanging spots (laid out by hand); which painting fills each spot is drawn per castle from the seeded rng, so a castle always shows the same ones */
+const tpl = CASTLE_PAINT_SLOTS;
+const sx = w/12.8, sz = d/12.8, sy = (I.h || 25.6)/25.6;
+if(mine){
+/* your keep: bare until you have stashed paintings; they fill the spots in the order they were stashed */
+const asg = castleKeepAssign(stashedPaintings);
+tpl.forEach((sl, i) => {
+const n = asg.slots[i]; if(!n) return;
+let x = sl.x*sx, y = sl.y > 4 ? sl.y*sy : sl.y, z = sl.z*sz;
+if(sl.k === 'X' && n === 38){ x = sl.xx*sx; y = sl.xy; }
+const g = makePainting(n);
+g.position.set(x, y, z); g.rotation.y = sl.yaw;
+scene.add(g);
+});
+return;
+}
+const smallPool = paintShuffle(PAINT_SMALL, rng);
+const largePool = paintShuffle([28, 29, 30, 31, 32, 33, 34, 35, 36, 37], rng);
+const useXL = rng() < 0.4;                       /* the huge 4 x 4 (38) takes the big south-wall spot when it is drawn */
+let si = 0, li = 0;
+for(const sl of tpl){
+let n, x = sl.x*sx, y = sl.y > 4 ? sl.y*sy : sl.y, z = sl.z*sz, yaw = sl.yaw;
+if(sl.k === 'S') n = smallPool[si++ % smallPool.length];
+else if(sl.k === 'X' && useXL){ n = 38; x = sl.xx*sx; y = sl.xy; }
+else n = largePool[li++ % largePool.length];
+const g = makePainting(n);
+g.position.set(x, y, z);
+g.rotation.y = yaw;
+scene.add(g);
+}
+}
+/* ---------- dungeon: one draggable painting on a cavern wall ---------- */
+let dragPaint = null;
+/* is this side of the cell a wall? (tower dungeons also wall off sides that face solid rock / the map edge) */
+/* distance from a cell line to the visible wall face: cave walls straddle the line (half thickness); tower-dungeon wall slabs sit INSIDE the cell (full thickness) */
+function dunWallInset(){ return DUN.spiral ? WALL_THICK : WALL_THICK/2; }
+function dunEdgeBlocked(i, j, d){
+const c = DUN.cells[i] && DUN.cells[i][j]; if(!c) return false;
+if(c.walls && c.walls[d]) return true;
+if(!DUN.spiral) return false;
+const dx = d === 'e' ? 1 : (d === 'w' ? -1 : 0), dz = d === 's' ? 1 : (d === 'n' ? -1 : 0);
+const ni = i + dx, nj = j + dz;
+if(ni < 0 || nj < 0 || ni >= DUN.W || nj >= DUN.D) return !(i === 0 && j === DUN.entranceJ && d === 'w');
+const nb = DUN.cells[ni][nj];
+return !nb || !!nb.solid;
+}
+/* which stashed painting goes in which castle spot: small ones in the small spots, 28-37 in the large spots, 38 in the big south-wall spot; whatever does not fit overflows into the keep's dungeon */
+function castleKeepAssign(stash){
+const smalls = stash.filter(n => n <= 27), larges = stash.filter(n => n >= 28 && n <= 37), has38 = stash.indexOf(38) >= 0;
+const slots = []; let si = 0, li = 0;
+for(const sl of CASTLE_PAINT_SLOTS){
+if(sl.k === 'S') slots.push(smalls[si++] || 0);
+else if(sl.k === 'X' && has38) slots.push(38);
+else slots.push(larges[li++] || 0);
+}
+return { slots, overflow: smalls.slice(si).concat(larges.slice(li)) };
+}
+let _paintSiteIds = null;
+/* the 38 paintings are dealt out once, at random, to the world's dungeons: one painting per dungeon, never repeated, so most dungeons hold none */
+function paintingForDungeon(shrine){
+if(!shrine) return 0;
+if(!_paintSiteIds){
+const W = BAKED_WORLD, all = [];
+const add = (list, kind) => (list || []).forEach(q => all.push({ x: q.x, z: q.z, kind, id: 0 }));
+add(W.shrines, 'shrine');
+add((W.towers || []).map(resolveTowerSite).filter(t => !t.deleted), 'tower');
+add(W.castles, 'castle');
+add(W.boulderCaves, 'cave'); add(W.torCaves, 'cave'); add(W.seaCaves, 'cave');
+all.sort((a, b) => (a.x - b.x) || (a.z - b.z));
+const r = makeRng(0x5ea1c0de);
+for(let i = all.length - 1; i > 0; i--){ const j = Math.floor(r()*(i + 1)); const t = all[i]; all[i] = all[j]; all[j] = t; }
+const ids = []; for(let i = 1; i <= 38; i++) ids.push(i);
+for(let i = ids.length - 1; i > 0; i--){ const j = Math.floor(r()*(i + 1)); const t = ids[i]; ids[i] = ids[j]; ids[j] = t; }
+all.forEach((st, i) => { st.id = i < 38 ? ids[i] : 0; });
+_paintSiteIds = all;
+}
+const isCastle = !!shrine.castleKeep;
+const qx = isCastle ? shrine.castleX : shrine.cx, qz = isCastle ? shrine.castleZ : shrine.cz;
+const lim = isCastle ? 70 : 26;
+let best = null, bestD = Infinity;
+for(const st of _paintSiteIds){
+if((st.kind === 'castle') !== isCastle) continue;
+const d = Math.hypot(st.x - qx, st.z - qz);
+if(d < bestD){ bestD = d; best = st; }
+}
+return (best && bestD < lim) ? best.id : 0;
+}
+/* your keep's dungeon: stashed paintings that did not fit in the keep hang on the cavern walls */
+function dunStashPaintings(L, scene){
+const over = castleKeepAssign(stashedPaintings).overflow;
+if(!over.length || !L.cells) return;
+const CS = DUN.CS, cells = L.cells, spots = [];
+for(const ch of L.chambers){
+if(ch.bottom) continue;
+for(let i = ch.i0; i < ch.i0 + ch.cw; i++) for(let j = ch.j0; j < ch.j0 + ch.cd; j++){
+const c = cells[i] && cells[i][j]; if(!c || c.stair || c.solid) continue;
+if(j === ch.j0 && dunEdgeBlocked(i, j, 'n')) spots.push([(i + 0.5)*CS, j*CS, 0]);
+if(j === ch.j0 + ch.cd - 1 && dunEdgeBlocked(i, j, 's')) spots.push([(i + 0.5)*CS, (j + 1)*CS, Math.PI]);
+if(i === ch.i0 && dunEdgeBlocked(i, j, 'w')) spots.push([i*CS, (j + 0.5)*CS, Math.PI/2]);
+if(i === ch.i0 + ch.cw - 1 && dunEdgeBlocked(i, j, 'e')) spots.push([(i + 1)*CS, (j + 0.5)*CS, -Math.PI/2]);
+}
+}
+spots.sort((a, b) => (a[1] - b[1]) || (a[0] - b[0]));
+const r = makeRng(0x3b1d5a7);
+for(let i = spots.length - 1; i > 0; i--){ const j = Math.floor(r()*(i + 1)); const t = spots[i]; spots[i] = spots[j]; spots[j] = t; }
+const off = dunWallInset() + (DUN.spiral ? 0.04 : 0.085) + 0.034;
+const taken = (DUN.paint || []).map(q => q.g.position);
+let k = 0;
+for(const n of over){
+let pick = null;
+while(k < spots.length){
+const sp = spots[k++];
+if(taken.some(t => Math.hypot(t.x - sp[0], t.z - sp[1]) < 1.8)) continue;
+pick = sp; break;
+}
+if(!pick) break;
+const spc = PAINT_SPECS[n];
+const g = makePainting(n);
+const nx = Math.sin(pick[2]), nz = Math.cos(pick[2]);
+const px = pick[0] + nx*off, pz = pick[1] + nz*off;
+const fy = dunFloorHeight(px + nx*0.5, pz + nz*0.5);
+g.position.set(px, fy + (spc[1] > 0.6 ? spc[1]/2 + 0.45 : 1.45), pz);
+g.rotation.y = pick[2];
+scene.add(g);
+}
+}
+function dunPaintingAdd(L, scene){
+DUN.paint = [];
+const lootRec = dunLootRec(true);
+if(!lootRec) return;
+/* the 38 paintings are shared out among the world's dungeons, each in one place only (so many dungeons have none) */
+if(lootRec.pn === undefined) lootRec.pn = paintingForDungeon(DUN.returnShrine);
+const n = lootRec.pn;
+if(!n) return;   /* none here, or already collected */
+const CS = DUN.CS, cells = L.cells;
+if(!cells || !L.chambers || !L.chambers.length) return;
+const ej = (L.entranceJ !== undefined) ? L.entranceJ : 0;
+/* never the grotto: the bottom chamber holds the pool, so leave it (and anything close to it) alone */
+const grotto = L.chambers.find(c => c.bottom);
+const nearGrotto = (ch) => {
+if(!grotto) return false;
+const cx = (ch.i0 + ch.cw/2)*CS, cz = (ch.j0 + ch.cd/2)*CS, gx = (grotto.i0 + grotto.cw/2)*CS, gz = (grotto.j0 + grotto.cd/2)*CS;
+return Math.hypot(cx - gx, cz - gz) < (Math.max(grotto.cw, grotto.cd)/2 + Math.max(ch.cw, ch.cd)/2)*CS + 8;
+};
+let pool = L.chambers.filter(c => !c.bottom && !nearGrotto(c));
+if(!pool.length) pool = L.chambers.filter(c => !c.bottom);
+if(!pool.length) return;
+const byDist = pool.slice().sort(L.spiral
+? (p, q) => (q.h || 0) - (p.h || 0)                                  /* tower dungeons: the upper chambers are reached first */
+: (p, q) => Math.hypot(p.i0, p.j0 - ej) - Math.hypot(q.i0, q.j0 - ej));
+if(n === 38){
+/* the 4 x 4 is far too big to hang in a cavern: it lies face-up in the roomiest chamber */
+const ch = byDist.slice().sort((a, b) => b.cw*b.cd - a.cw*a.cd)[0];
+const g38 = makePainting(38);
+const cx = (ch.i0 + ch.cw/2)*CS, cz = (ch.j0 + ch.cd/2)*CS;
+g38.rotation.x = -Math.PI/2;
+g38.position.set(cx, dunItemRest(cx, cz, 2.0).hi + 0.034, cz);
+scene.add(g38);
+const lamp38 = new THREE.PointLight(0xffd7a0, 0.9, 7, 2);
+lamp38.position.set(cx, g38.position.y + 1.4, cz);
+scene.add(lamp38);
+DUN.paint.push({ g: g38, state: 'rest', n, lamp: lamp38 });
+return;
+}
+const gather = (list) => {
+const out = [];
+for(const ch of list){
+for(let i = ch.i0; i < ch.i0 + ch.cw; i++) for(let j = ch.j0; j < ch.j0 + ch.cd; j++){
+const c = cells[i] && cells[i][j]; if(!c || c.stair || c.solid) continue;
+if(j === ch.j0 && dunEdgeBlocked(i, j, 'n')) out.push([(i + 0.5)*CS, j*CS, 0]);
+if(j === ch.j0 + ch.cd - 1 && dunEdgeBlocked(i, j, 's')) out.push([(i + 0.5)*CS, (j + 1)*CS, Math.PI]);
+if(i === ch.i0 && dunEdgeBlocked(i, j, 'w')) out.push([i*CS, (j + 0.5)*CS, Math.PI/2]);
+if(i === ch.i0 + ch.cw - 1 && dunEdgeBlocked(i, j, 'e')) out.push([(i + 1)*CS, (j + 0.5)*CS, -Math.PI/2]);
+}
+}
+return out;
+};
+/* prefer the half of the dungeon you reach first, so it can actually be found */
+let cands = gather(byDist.slice(0, Math.max(1, Math.ceil(byDist.length/2))));
+if(!cands.length) cands = gather(byDist);
+if(!cands.length) return;
+const sh = DUN.returnShrine || {};
+const rng = makeRng(((Math.round(((sh.cx || 0))*10))*73856093) ^ ((Math.round(((sh.cz || 0))*10))*19349663) ^ 0x2f6e2b1);
+rng(); rng();
+const pick = cands[Math.floor(rng()*cands.length)];
+const g = makePainting(n);
+const spc = PAINT_SPECS[n], bigP = spc[1] > 0.6;
+/* cave walls are centred on the cell line; tower-dungeon walls start at it and thicken outward */
+const off = dunWallInset() + (DUN.spiral ? 0.04 : 0.085) + 0.034;
+const nx = Math.sin(pick[2]), nz = Math.cos(pick[2]);
+const px = pick[0] + nx*off, pz = pick[1] + nz*off;
+const fy = dunFloorHeight(px + nx*0.5, pz + nz*0.5);
+g.position.set(px, fy + (bigP ? spc[1]/2 + 0.45 : 1.45), pz);
+g.rotation.y = pick[2];
+scene.add(g);
+/* a small warm light so the picture shows up in the dark */
+const lamp = new THREE.PointLight(0xffd7a0, 0.9, 6, 2);
+lamp.position.set(px + nx*0.9, fy + 1.55, pz + nz*0.9);
+scene.add(lamp);
+DUN.paint.push({ g, state: 'wall', n, lamp });
+}
+function dunWallDistances(x, z){
+const CS = DUN.CS, i = Math.floor(x/CS), j = Math.floor(z/CS);
+if(i < 0 || j < 0 || i >= DUN.W || j >= DUN.D) return null;
+const lx = x - i*CS, lz = z - j*CS, T2 = dunWallInset();
+const res = [];
+if(dunEdgeBlocked(i, j, 'w')) res.push({ dist: lx - T2, yaw: Math.PI/2, face: [i*CS + T2, null] });
+if(dunEdgeBlocked(i, j, 'e')) res.push({ dist: CS - lx - T2, yaw: -Math.PI/2, face: [(i + 1)*CS - T2, null] });
+if(dunEdgeBlocked(i, j, 'n')) res.push({ dist: lz - T2, yaw: 0, face: [null, j*CS + T2] });
+if(dunEdgeBlocked(i, j, 's')) res.push({ dist: CS - lz - T2, yaw: Math.PI, face: [null, (j + 1)*CS - T2] });
+return res;
+}
+function tryGrabPaint(e){
+if(!DUN.active || mapMode || !DUN.paint || !DUN.paint.length) return false;
+const ray = dragRayAt(e.clientX, e.clientY);
+let best = null, bestD = GRAB_DIST + 1;
+for(const P of DUN.paint){
+if(!P.g.parent) continue;
+const hits = _ray.intersectObject(P.g, true);
+if(hits.length && hits[0].distance < bestD && hits[0].distance <= GRAB_DIST){ bestD = hits[0].distance; best = P; }
+}
+if(!best) return false;
+if(!best.home) best.home = [best.g.position.x, best.g.position.z];
+best.state = 'drag';
+best.collecting = false;
+best.g.rotation.z = 0;
+dragPaint = { P: best };
+setJingleLoop(true, 1.0);
+return true;
+}
+/* Walk a dragged painting from (x0,z0) towards (x1,z1) in small steps. It may never get closer to a wall face than 0.3 m (or than it already was, so a painting still hanging on its wall can slide along it or come away from it, but never go into or through it). Returns the last allowed point. */
+function paintMoveLimit(x0, z0, x1, z1){
+const CS = DUN.CS, inset = dunWallInset(), MARG = 0.3;
+const dists = (i, j, x, z) => {
+const lx = x - i*CS, lz = z - j*CS, o = {};
+if(dunEdgeBlocked(i, j, 'w')) o.w = lx - inset;
+if(dunEdgeBlocked(i, j, 'e')) o.e = CS - lx - inset;
+if(dunEdgeBlocked(i, j, 'n')) o.n = lz - inset;
+if(dunEdgeBlocked(i, j, 's')) o.s = CS - lz - inset;
+return o;
+};
+const len = Math.hypot(x1 - x0, z1 - z0);
+const steps = Math.max(1, Math.ceil(len/0.06));
+let px = x0, pz = z0;
+for(let k = 1; k <= steps; k++){
+const x = x0 + (x1 - x0)*k/steps, z = z0 + (z1 - z0)*k/steps;
+const i = Math.floor(x/CS), j = Math.floor(z/CS);
+if(i < 0 || j < 0 || i >= DUN.W || j >= DUN.D) break;
+const c = DUN.cells[i][j]; if(!c || c.solid) break;
+const dn = dists(i, j, x, z), dp = dists(i, j, px, pz);
+let ok = true;
+for(const d in dn){ if(dn[d] < Math.min(MARG, dp[d]) - 0.001){ ok = false; break; } }
+if(!ok) break;
+px = x; pz = z;
+}
+if(px === x0 && pz === z0 && len > 0.001){
+/* blocked head-on: still allow the part of the move that runs along the wall */
+const tryAxis = (tx, tz) => { const r = (tx === x0 && tz === z0) ? null : paintMoveLimitAxis(x0, z0, tx, tz, dists, CS); return r; };
+const ax = tryAxis(x1, z0); if(ax && (ax[0] !== x0 || ax[1] !== z0)) return ax;
+const az = tryAxis(x0, z1); if(az && (az[0] !== x0 || az[1] !== z0)) return az;
+}
+return [px, pz];
+}
+function paintMoveLimitAxis(x0, z0, x1, z1, dists, CS){
+const MARG = 0.3, len = Math.hypot(x1 - x0, z1 - z0), steps = Math.max(1, Math.ceil(len/0.06));
+let px = x0, pz = z0;
+for(let k = 1; k <= steps; k++){
+const x = x0 + (x1 - x0)*k/steps, z = z0 + (z1 - z0)*k/steps;
+const i = Math.floor(x/CS), j = Math.floor(z/CS);
+if(i < 0 || j < 0 || i >= DUN.W || j >= DUN.D) break;
+const c = DUN.cells[i][j]; if(!c || c.solid) break;
+const dn = dists(i, j, x, z), dp = dists(i, j, px, pz);
+let ok = true;
+for(const d in dn){ if(dn[d] < Math.min(MARG, dp[d]) - 0.001){ ok = false; break; } }
+if(!ok) break;
+px = x; pz = z;
+}
+return [px, pz];
+}
+function dragPaintBy(){
+const d = dragPaint; if(!d) return;
+const P = d.P, g = P.g;
+const planeY = dunFloorHeight(g.position.x, g.position.z) + 1.0;
+const tg = dragPlaneFollow(d, g.position.x, g.position.z, planeY);
+if(!tg) return;
+const [nx, nz] = dragBarrierClamp(g.position.x, g.position.z, tg[0], tg[1]);
+const lim = paintMoveLimit(g.position.x, g.position.z, nx, nz);
+if(!lim) return;
+const px2 = lim[0], pz2 = lim[1];
+g.position.x = px2; g.position.z = pz2;
+if(!P.home) P.home = [g.position.x, g.position.z];
+const near = Math.hypot(px2 - camera.position.x, pz2 - camera.position.z) < 0.95 && (P.pulled || Math.hypot(px2 - P.home[0], pz2 - P.home[1]) > 0.7);
+if(near) P.pulled = true;
+if(near !== !!P.collecting){ P.collecting = near; g.rotation.z = near ? 0.55 : 0; }
+}
+function releasePaint(){
+const d = dragPaint; if(!d) return;
+dragPaint = null;
+setJangleLoop(false); setJingleLoop(false);
+const P = d.P, g = P.g;
+if(P.collecting){
+if(P.lamp && P.lamp.parent) P.lamp.parent.remove(P.lamp);
+paintDispose(g);
+const k = DUN.paint.indexOf(P); if(k >= 0) DUN.paint.splice(k, 1);
+collectedCount += paintValueOf(P.n);
+carriedPaintings.push({ n: P.n, k: DUN.returnShrine ? posKey(DUN.returnShrine.cx, DUN.returnShrine.cz) : '' });
+if(DUN.lootRec) DUN.lootRec.pn = 0;
+playVoiceLine('ching.mp3', 0.45);
+updateCollectedLabel();
+saveGame();
+return;
+}
+g.rotation.z = 0;
+const ph = g.userData.paint, x = g.position.x, z = g.position.z;
+const walls = dunWallDistances(x, z);
+let near = null;
+if(walls) for(const wl of walls) if(wl.dist < 0.85 && (!near || wl.dist < near.dist)) near = wl;
+const alpha = 0.27;
+P.fall = { vy: 0, y0: g.position.y, x0: x, z0: z, rx0: g.rotation.x, ry0: g.rotation.y, t: 0 };
+if(near){
+const out = ph.h*Math.sin(alpha) + 0.10;
+const nxn = Math.sin(near.yaw), nzn = Math.cos(near.yaw);
+const bx = (near.face[0] !== null ? near.face[0] : x) + (near.face[0] !== null ? nxn*out : 0);
+const bz = (near.face[1] !== null ? near.face[1] : z) + (near.face[1] !== null ? nzn*out : 0);
+const floorY = dunItemRest(bx, bz, 0.2).hi;
+P.fall.tx = bx + nxn*0; P.fall.tz = bz + nzn*0;
+P.fall.ty = floorY + (ph.h/2)*Math.cos(alpha) + 0.012;
+P.fall.rx = -alpha; P.fall.ry = near.yaw;
+/* centre of the picture sits above the bottom edge, shifted toward the wall by (h/2)·sinα */
+P.fall.tx -= nxn*(ph.h/2)*Math.sin(alpha); P.fall.tz -= nzn*(ph.h/2)*Math.sin(alpha);
+P.fall.lean = true;
+} else {
+const floorY = dunItemRest(x, z, Math.max(ph.w, ph.h)*0.45).hi;
+P.fall.tx = x; P.fall.tz = z;
+P.fall.ty = floorY + 0.034;
+P.fall.rx = -Math.PI/2; P.fall.ry = g.rotation.y;
+}
+P.state = 'fall';
+}
+function paintTick(dt){
+if(!DUN.paint || !DUN.paint.length) return;
+if(!DUN.active){ dragPaint = null; return; }
+const cam = camera.position;
+for(const P of DUN.paint){
+const g = P.g; if(!g.parent) continue;
+if(P.state === 'drag'){
+const ty = dunFloorHeight(g.position.x, g.position.z) + 1.0;
+g.position.y += (ty - g.position.y)*Math.min(1, dt*7);
+g.rotation.x += (0 - g.rotation.x)*Math.min(1, dt*8);
+} else if(P.state === 'fall'){
+const f = P.fall;
+f.vy -= 9.8*dt;
+g.position.y += f.vy*dt;
+const span = Math.max(0.05, f.y0 - f.ty);
+const prog = Math.max(0, Math.min(1, (f.y0 - g.position.y)/span));
+const e = prog*prog*(3 - 2*prog);
+g.position.x = f.x0 + (f.tx - f.x0)*e; g.position.z = f.z0 + (f.tz - f.z0)*e;
+g.rotation.x = f.rx0 + (f.rx - f.rx0)*e;
+let dy = f.ry - f.ry0; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+g.rotation.y = f.ry0 + dy*e;
+if(g.position.y <= f.ty){
+g.position.set(f.tx, f.ty, f.tz);
+g.rotation.x = f.rx; g.rotation.y = f.ry;
+P.state = 'rest'; P.fall = null;
+}
+}
+}
+}
+/* ================= end paintings ================= */
+
+/* ================= WAR CHANT: warchant.mp3 while a sword is drawn on Mindor ================= */
+const WAR = { el: null, vol: 0, force: false };
+function warWanted(){
+if(WAR.force) return true;
+if(!gameStarted || !pvpLocalOnMindor()) return false;
+if(swordDrawn) return true;
+const mine = localPlaceKey();
+for(const r of REMOTE_PLAYERS.values()){
+if(!r.drawn || !r.onMindor) continue;
+if((r.place || 'out') !== mine) continue;
+if(mine === 'out' && Math.hypot(r.x - camera.position.x, r.z - camera.position.z) > 90) continue;
+return true;
+}
+return false;
+}
+function warchantTick(dt){
+const want = warWanted();
+/* a fresh start (track at the beginning) comes in at full volume; only a resume after sheathing fades in */
+if(want && WAR.vol <= 0.005 && (!WAR.el || WAR.el.currentTime < 0.3)) WAR.vol = 1;
+else WAR.vol = Math.max(0, Math.min(1, WAR.vol + (want ? 1 : -1)*dt/2.0));
+if(WAR.vol > 0.005){
+if(!WAR.el){ WAR.el = new Audio('warchant.mp3'); WAR.el.loop = true; WAR.el.volume = 0; }
+if(WAR.el.paused){ try{ const pr = WAR.el.play(); if(pr && pr.catch) pr.catch(()=>{}); }catch(e){} }
+WAR.el.volume = WAR.vol*0.9;
+} else if(WAR.el && !WAR.el.paused){
+try{ WAR.el.pause(); }catch(e){}
+}
+}
+/* ================= end war chant ================= */
 let dragPubBottle = null;
 const _pubPlane = new THREE.Plane();
 const _pubHit = new THREE.Vector3();
@@ -12577,8 +13405,8 @@ dragWallSword = null;
 }
 function layOutStash(scene2, I, total, maxItems){
 if(total <= 0) return;
-const treasures = Math.floor(total/10);
-const ornaments = total - treasures*10;
+const treasures = Math.floor(total + 1e-6);
+const ornaments = Math.round((total - treasures)*10);
 const items = [];
 for(let i=0;i<treasures;i++) items.push(makeTreasure());
 for(let i=0;i<ornaments;i++) items.push(makeLatheOrnament(ORNAMENT_LATHE_KEYS[Math.floor(Math.random()*ORNAMENT_LATHE_KEYS.length)]));
@@ -13383,6 +14211,7 @@ if(door.isAuthor && !door.isLibrary) furnish('author', ()=>{ addAuthorFurnishing
 if(door.isLibrary) furnish('library', ()=>{ addLibraryFurnishings(I, door); authorDiscovered = true; });
 if(door.isForge) furnish('forge', ()=>addForgeFurnishings(I, door.inMoor, door));
 if(door.isCartographer && !door.isLibrary) furnish('cartographer', ()=>addCartographerFurnishings(I, door.cx, door.cz, door.angle));
+furnish('paintings', ()=>addInteriorPaintings(I, door));
 try{
 if(door.isAuthor && I.majlisSeats && I.majlisSeats.length){
 const SEATED_SINK = 0.58;
@@ -13441,7 +14270,7 @@ else if(door.houseX !== undefined) setLastSpot({ kind: 'house', x: door.houseX, 
 }
 if(door.playerOwned){
 let banked = collectedCount > 0;
-if(collectedCount > 0){ stashCount += collectedCount; collectedCount = 0; updateCollectedLabel(); }
+if(collectedCount > 0){ stashCount += collectedCount; collectedCount = 0; bankPaintings(); updateCollectedLabel(); }
 for(const k of ['ifrit','spriggan','bucca']){
 if(collectedHeadTally[k] > 0){ stashedHeadTally[k] += collectedHeadTally[k]; collectedHeadTally[k] = 0; banked = true; }
 }
@@ -13453,6 +14282,7 @@ const bankedNow = collectedCount > 0;
 if(collectedCount > 0){
 stashCount += collectedCount;
 collectedCount = 0;
+bankPaintings();
 updateCollectedLabel();
 }
 if(bankedNow && door.type && door.doorAngleSaved !== false){
@@ -13467,7 +14297,7 @@ doorAngle: door.angle, doorX: door.cx, doorZ: door.cz
 ownedHomes = ownedHomes.filter(h => !(h.x === playerHouse.x && h.z === playerHouse.z)); ownedHomes.push(playerHouse);
 respawnAtCastle = false;
 }
-layOutStash(I.scene, I, stashCount, (door.type && door.type.riad) ? 1000 : 100);
+layOutStash(I.scene, I, Math.max(0, stashCount - stashedPaintValue()), (door.type && door.type.riad) ? 1000 : 100);
 addStoredSwordToWall(I);
 saveGame();
 }
@@ -15787,6 +16617,7 @@ themeAudio.pause(); themeAudio.currentTime = 0; themeAudio.volume = 1;
 }
 function playThemeMusic(){
 if(themeFadeTimer){ clearInterval(themeFadeTimer); themeFadeTimer = null; }
+if(typeof WAR !== 'undefined' && WAR.force){ try{ themeAudio.pause(); }catch(e){} return; }
 themeAudio.volume = 1;
 try{
 const pr = themeAudio.play();
@@ -15871,12 +16702,19 @@ clearHorseTutorialIfDismounted();
 let harpAudio = null, harpVol = 0;
 function updateHarpAudio(dt){
 const here = !!(INT.active && !DUN.active && INT.I && INT.I.harpists && INT.I.harpists.length && !INT.I.storyHarpPause && !INT.I.storyHarpFrozen);
+let wantHarp = 'harp.mp3';
+{ const d = INT.door;
+if(here && d && d.isCastleKeep){
+const id = islandIdAt(d.houseX !== undefined ? d.houseX : d.cx, d.houseZ !== undefined ? d.houseZ : d.cz);
+if(id === ISLAND_GALIO || id === ISLAND_KERU) wantHarp = 'harp2.mp3';
+} }
+if(here && harpAudio && harpAudio.srcName !== wantHarp){ pauseSeamlessLoop(harpAudio); harpAudio = null; }
 harpVol += ((here ? 1 : 0) - harpVol) * Math.min(1, dt*3);
 if(harpVol < 0.01){
 if(harpAudio) pauseSeamlessLoop(harpAudio);
 return;
 }
-if(!harpAudio) harpAudio = createSeamlessLoop('harp.mp3');
+if(!harpAudio){ harpAudio = createSeamlessLoop(wantHarp); harpAudio.srcName = wantHarp; }
 updateSeamlessLoop(harpAudio, harpVol);
 }
 let trotAudio = null, trotVol = 0;
@@ -16395,7 +17233,7 @@ const kk = fig.userData.kingHeadTrade;
 const nHeads = (collectedHeadTally[kk]||0) + (stashedHeadTally[kk]||0);
 collectedHeadTally[kk] = 0;
 stashedHeadTally[kk] = 0;
-collectedCount += 100*nHeads;
+collectedCount += 3*nHeads;
 updateCollectedLabel();
 saveGame();
 if(fig.userData.questQueen && nHeads > 0){ try{ storyOnBuccaDelivered(); }catch(e){ console.error('story bucca:', e); } }
@@ -16406,10 +17244,7 @@ return;
 }
 if(fig.userData.smithSale){
 const sp = fig.userData.smithSale.price;
-const fromCarriedS = Math.min(collectedCount, sp);
-collectedCount -= fromCarriedS;
-const fromStashS = sp - fromCarriedS;
-if(fromStashS > 0) stashCount = Math.max(0, stashCount - fromStashS);
+spendGold(sp);
 updateCollectedLabel();
 swordUnlocked = true;
 saveGame();
@@ -16420,10 +17255,7 @@ return;
 }
 if(fig.userData.castleSale){
 const cp = CASTLE_PRICE;
-const fromCarriedC = Math.min(collectedCount, cp);
-collectedCount -= fromCarriedC;
-const fromStashC = cp - fromCarriedC;
-if(fromStashC > 0) stashCount = Math.max(0, stashCount - fromStashC);
+spendGold(cp);
 updateCollectedLabel();
 ownsCastle = true;
 const kd = fig.userData.landlordDoor;
@@ -16447,10 +17279,7 @@ return;
 }
 if(fig.userData.horseTrade){
 const hp = horsePriceFor(fig);
-const fromCarriedH = Math.min(collectedCount, hp);
-collectedCount -= fromCarriedH;
-const fromStashH = hp - fromCarriedH;
-if(fromStashH > 0) stashCount = Math.max(0, stashCount - fromStashH);
+spendGold(hp);
 updateCollectedLabel();
 ownedHorse = true;
 { const hpg = fig.userData.tradeHorse && fig.userData.tradeHorse.userData.pricePage; if(hpg && hpg.parent) hpg.parent.remove(hpg); }
@@ -16464,10 +17293,7 @@ return;
 const door = fig.userData.landlordDoor;
 if(!door) return;
 const price = landlordPrice(fig);
-const fromCarried = Math.min(collectedCount, price);
-collectedCount -= fromCarried;
-const fromStash = price - fromCarried;
-if(fromStash > 0) stashCount = Math.max(0, stashCount - fromStash);
+spendGold(price);
 updateCollectedLabel();
 door.unlocked = true;
 door.forSale = false;
@@ -18147,26 +18973,26 @@ const cands = [];
 for(let i = ch.i0; i < ch.i0 + ch.cw; i++) for(let j = ch.j0; j < ch.j0 + ch.cd; j++){
 const c = cells[i][j]; if(!c) continue;
 const inset = 0.75;
-if(j === ch.j0 && c.walls.n) cands.push([(i+0.5)*CS, j*CS + inset, 0, i, j]);
-if(j === ch.j0 + ch.cd - 1 && c.walls.s) cands.push([(i+0.5)*CS, (j+1)*CS - inset, Math.PI, i, j]);
-if(i === ch.i0 && c.walls.w) cands.push([i*CS + inset, (j+0.5)*CS, Math.PI/2, i, j]);
-if(i === ch.i0 + ch.cw - 1 && c.walls.e) cands.push([(i+1)*CS - inset, (j+0.5)*CS, -Math.PI/2, i, j]);
+if(j === ch.j0 && dunEdgeBlocked(i, j, 'n')) cands.push([(i+0.5)*CS, j*CS + inset, 0, i, j, 'n']);
+if(j === ch.j0 + ch.cd - 1 && dunEdgeBlocked(i, j, 's')) cands.push([(i+0.5)*CS, (j+1)*CS - inset, Math.PI, i, j, 's']);
+if(i === ch.i0 && dunEdgeBlocked(i, j, 'w')) cands.push([i*CS + inset, (j+0.5)*CS, Math.PI/2, i, j, 'w']);
+if(i === ch.i0 + ch.cw - 1 && dunEdgeBlocked(i, j, 'e')) cands.push([(i+1)*CS - inset, (j+0.5)*CS, -Math.PI/2, i, j, 'e']);
 }
 if(!cands.length) return null;
 const pick = cands[Math.floor(Math.random()*cands.length)];
 const fig = buildPrisoner(scene, pick[0], dunFloorHeight(pick[0], pick[1]), pick[1], pick[2]);
 {
-const pc = cells[pick[3]][pick[4]];
-const wt = WALL_THICK/2 + 0.04;
+/* put the figure's back flush against the visible wall face (cave walls straddle the cell line, tower-dungeon slabs sit inside the cell) */
+const wt = dunWallInset() + 0.03;
 for(let pass = 0; pass < 3; pass++){
 fig.updateMatrixWorld(true);
 const bb = new THREE.Box3().setFromObject(fig);
 let sx = 0, sz = 0;
-if(pc.walls.w){ const f = pick[3]*CS + wt; if(bb.min.x < f) sx = Math.max(sx, f - bb.min.x); }
-if(pc.walls.e){ const f = (pick[3]+1)*CS - wt; if(bb.max.x > f) sx = Math.min(sx, f - bb.max.x); }
-if(pc.walls.n){ const f = pick[4]*CS + wt; if(bb.min.z < f) sz = Math.max(sz, f - bb.min.z); }
-if(pc.walls.s){ const f = (pick[4]+1)*CS - wt; if(bb.max.z > f) sz = Math.min(sz, f - bb.max.z); }
-if(!sx && !sz) break;
+if(pick[5] === 'w') sx = (pick[3]*CS + wt) - bb.min.x;
+else if(pick[5] === 'e') sx = ((pick[3]+1)*CS - wt) - bb.max.x;
+else if(pick[5] === 'n') sz = (pick[4]*CS + wt) - bb.min.z;
+else sz = ((pick[4]+1)*CS - wt) - bb.max.z;
+if(Math.abs(sx) < 0.005 && Math.abs(sz) < 0.005) break;
 fig.position.x += sx; fig.position.z += sz;
 }
 }
@@ -21188,6 +22014,7 @@ tutorialFadeIn(tutorialTextEl);
 }
 }
 fadeOutTheme(2.5);
+WAR.force = false;
 hudRevealed = true;
 updateHudVisibility();
 for(const name of AMBIENT_TRACKS){
@@ -21215,7 +22042,7 @@ tutorialFadeOut(tutorialTextEl, requestMovementGrid);
 function anyDragActive(){
 return !!(dragLoot || dragPot || dragLimb || dragFrag || dragPlatterGoblet || dragStashItem || dragBookPart ||
 dragSword || dragWallSword || dragAdlPiece || dragPubBottle || dragSword2 || dragSword3 || dragDealHand ||
-dragHead || dragRudder || dragSail);
+dragHead || dragRudder || dragSail || dragRemains || dragPaint);
 }
 window.addEventListener('mousemove', (e)=>{
 if(pointerLocked){
@@ -21266,6 +22093,7 @@ if(dragSword3) dragSword3By(0, 0);
 if(dragWallSword) dragWallSwordBy(0, 0);
 if(dragLoot) dragLootBy(0, 0);
 if(dragRemains) dragRemainsBy();
+if(dragPaint) dragPaintBy();
 if(dragPot) dragPotBy(0, 0);
 if(dragPlatterGoblet) dragPlatterGobletBy(0, 0);
 if(dragStashItem) dragStashItemBy(0, 0);
@@ -21483,7 +22311,7 @@ if(it.userData.collider){ it.userData.collider.x = nx; it.userData.collider.z = 
 }
 restackHeights(tower);
 const DRAG_FAST_SPEED = 4.0;
-const isTreasure = (m.userData.value || 0) >= 10;
+const isTreasure = (m.userData.value || 0) >= 1;
 const isFast = isTreasure && dragLoot.speed > DRAG_FAST_SPEED;
 setJangleLoop(isFast, 1.0);
 setJingleLoop(!isFast, 1.0);
@@ -21573,6 +22401,7 @@ const k = DUN.lootColliders.indexOf(it.userData.collider);
 if(k>=0) DUN.lootColliders.splice(k,1);
 }
 collectedCount += (it.userData.value || 1);
+dunLootTake(it.userData.cat);
 playVoiceLine('ching.mp3', 0.45);
 saveGame();
 }
@@ -21686,6 +22515,7 @@ if(tryGrabMoonAxe(e)) return;
 if(tryGrabBookPart(e)) return;
 if(tryGrabFragment(e)) return;
 if(tryGrabRemains(e)) return;
+if(tryGrabPaint(e)) return;
 if(tryGrabLoot(e)) return;
 if(tryGrabPot(e)) return;
 if(tryGrabPlatterGoblet(e)) return;
@@ -21731,6 +22561,7 @@ if(CARPET.sackPress){ if(Math.hypot(px - CARPET.sackPress.x, py - CARPET.sackPre
 if(CARPET.drag){ dragCarpetBy(px - CARPET.drag.lastX, py - CARPET.drag.lastY); CARPET.drag.lastX = px; CARPET.drag.lastY = py; return; }
 if(dragMoonAxe){ dragMoonAxeBy(0, 0); return; }
 if(dragRemains){ dragRemainsBy(); return; }
+if(dragPaint){ dragPaintBy(); return; }
 if(dragLoot){
 dragLootBy(px - dragLoot.lastX, py - dragLoot.lastY);
 dragLoot.lastX = px; dragLoot.lastY = py;
@@ -21868,6 +22699,7 @@ releaseSword3();
 releaseWallSword();
 releaseAdellaPiece();
 releaseRemains();
+releasePaint();
 releasePubBottle();
 releaseDealHand();
 releaseHead();
@@ -22948,11 +23780,11 @@ const SKIRT = 2.6;
 function flatSlab(x0,z0,x1,z1,y){
 quadUV(sp,su, [x0,y,z0],[x1,y,z0],[x1,y,z1],[x0,y,z1],
 [x0/TS,z0/TS],[x1/TS,z0/TS],[x1/TS,z1/TS],[x0/TS,z1/TS]);
-const q=(a,b,c,d)=>quadUV(sp,su,a,b,c,d,[0,0],[1,0],[1,1],[0,1]);
-q([x0,y,z0],[x1,y,z0],[x1,y-SKIRT,z0],[x0,y-SKIRT,z0]);
-q([x1,y,z1],[x0,y,z1],[x0,y-SKIRT,z1],[x1,y-SKIRT,z1]);
-q([x1,y,z0],[x1,y,z1],[x1,y-SKIRT,z1],[x1,y-SKIRT,z0]);
-q([x0,y,z1],[x0,y,z0],[x0,y-SKIRT,z0],[x0,y-SKIRT,z1]);
+const q=(a,b,c,d,onZ)=>{ const f = (p) => [(onZ ? p[0] : p[2])/TS, p[1]/TS]; quadUV(sp,su,a,b,c,d,f(a),f(b),f(c),f(d)); };
+q([x0,y,z0],[x1,y,z0],[x1,y-SKIRT,z0],[x0,y-SKIRT,z0],true);
+q([x1,y,z1],[x0,y,z1],[x0,y-SKIRT,z1],[x1,y-SKIRT,z1],true);
+q([x1,y,z0],[x1,y,z1],[x1,y-SKIRT,z1],[x1,y-SKIRT,z0],false);
+q([x0,y,z1],[x0,y,z0],[x0,y-SKIRT,z0],[x0,y-SKIRT,z1],false);
 }
 function stairFlight(i,j,c){
 const [dx,dz] = c.stairDir;
@@ -23057,6 +23889,9 @@ else if(d==='s'){ ax=x1; az=z1; bx=x0; bz=z1; }
 else if(d==='e'){ ax=x1; az=z0; bx=x1; bz=z1; }
 else { ax=x0; az=z1; bx=x0; bz=z0; }
 const myEdgeCeil = edgeCeil(c, dx, dz);
+const alongZ = (d === 'n' || d === 's');
+const uL = (px, pz) => (alongZ ? px : pz)/TS;
+const uC = (px, pz) => (alongZ ? pz : px)/TS;
 if(blocked){
 const ox = -dx*WALL_T, oz = -dz*WALL_T;
 const yTopA = ceilAtPoint(c, i, j, ax, az);
@@ -23064,16 +23899,16 @@ const yTopB = ceilAtPoint(c, i, j, bx, bz);
 const yBot = myLo - WALL_SKIRT;
 quadUV(sp,su,
 [ax,yBot,az],[bx,yBot,bz],[bx,yTopB,bz],[ax,yTopA,az],
-[ax/TS,yBot/TS],[bx/TS,yBot/TS],[bx/TS,yTopB/TS],[ax/TS,yTopA/TS]);
+[uL(ax,az),yBot/TS],[uL(bx,bz),yBot/TS],[uL(bx,bz),yTopB/TS],[uL(ax,az),yTopA/TS]);
 quadUV(sp,su,
 [bx+ox,yBot,bz+oz],[ax+ox,yBot,az+oz],[ax+ox,yTopA,az+oz],[bx+ox,yTopB,bz+oz],
-[(bx+ox)/TS,yBot/TS],[(ax+ox)/TS,yBot/TS],[(ax+ox)/TS,yTopA/TS],[(bx+ox)/TS,yTopB/TS]);
+[uL(bx+ox,bz+oz),yBot/TS],[uL(ax+ox,az+oz),yBot/TS],[uL(ax+ox,az+oz),yTopA/TS],[uL(bx+ox,bz+oz),yTopB/TS]);
 quadUV(sp,su,
 [ax,yBot,az],[ax,yTopA,az],[ax+ox,yTopA,az+oz],[ax+ox,yBot,az+oz],
-[ax/TS,yBot/TS],[ax/TS,yTopA/TS],[(ax+ox)/TS,yTopA/TS],[(ax+ox)/TS,yBot/TS]);
+[uC(ax,az),yBot/TS],[uC(ax,az),yTopA/TS],[uC(ax+ox,az+oz),yTopA/TS],[uC(ax+ox,az+oz),yBot/TS]);
 quadUV(sp,su,
 [bx+ox,yBot,bz+oz],[bx+ox,yTopB,bz+oz],[bx,yTopB,bz],[bx,yBot,bz],
-[(bx+ox)/TS,yBot/TS],[(bx+ox)/TS,yTopB/TS],[bx/TS,yTopB/TS],[bx/TS,yBot/TS]);
+[uC(bx+ox,bz+oz),yBot/TS],[uC(bx+ox,bz+oz),yTopB/TS],[uC(bx,bz),yTopB/TS],[uC(bx,bz),yBot/TS]);
 quadUV(sp,su,
 [ax,yTopA,az],[bx,yTopB,bz],[bx+ox,yTopB,bz+oz],[ax+ox,yTopA,az+oz],
 [ax/TS,az/TS],[bx/TS,bz/TS],[(bx+ox)/TS,(bz+oz)/TS],[(ax+ox)/TS,(az+oz)/TS]);
@@ -23082,13 +23917,13 @@ const nbHi = edgeCeil(nb, -dx, -dz);
 if(myEdgeCeil > nbHi + 1e-4){
 quadUV(sp,su,
 [ax,nbHi,az],[bx,nbHi,bz],[bx,myEdgeCeil,bz],[ax,myEdgeCeil,az],
-[ax/TS,nbHi/TS],[bx/TS,nbHi/TS],[bx/TS,myEdgeCeil/TS],[ax/TS,myEdgeCeil/TS]);
+[uL(ax,az),nbHi/TS],[uL(bx,bz),nbHi/TS],[uL(bx,bz),myEdgeCeil/TS],[uL(ax,az),myEdgeCeil/TS]);
 }
 const nbLo = cellFloorLo(nb);
 if(nbLo > myLo + 1e-4){
 quadUV(sp,su,
 [ax,myLo-WALL_SKIRT,az],[bx,myLo-WALL_SKIRT,bz],[bx,nbLo,bz],[ax,nbLo,az],
-[ax/TS,(myLo-WALL_SKIRT)/TS],[bx/TS,(myLo-WALL_SKIRT)/TS],[bx/TS,nbLo/TS],[ax/TS,nbLo/TS]);
+[uL(ax,az),(myLo-WALL_SKIRT)/TS],[uL(bx,bz),(myLo-WALL_SKIRT)/TS],[uL(bx,bz),nbLo/TS],[uL(ax,az),nbLo/TS]);
 }
 }
 }
@@ -24185,7 +25020,7 @@ if(d < 70){ try{ stepHarpistPose(h.fig, dt); updateOdalisquePoseAndHair(h.fig, d
 const outdoor = !(INT.active || DUN.active);
 const vol = outdoor ? Math.max(0, Math.min(1, 1 - d/55)) : 0;
 if(vol < 0.01){ if(story.harpAudio) pauseSeamlessLoop(story.harpAudio); return; }
-if(!story.harpAudio) story.harpAudio = createSeamlessLoop('harp.mp3');
+if(!story.harpAudio) story.harpAudio = createSeamlessLoop('harp2.mp3');
 updateSeamlessLoop(story.harpAudio, vol);
 }
 const _ikD = new THREE.Vector3(), _ikHint = new THREE.Vector3(0, -1, 0), _ikDown = new THREE.Vector3(0, -1, 0);
@@ -25020,7 +25855,14 @@ remoteDropVehicle(r);
 if(r.fig.parent) r.fig.parent.remove(r.fig);
 REMOTE_PLAYERS.delete(id);
 }
+/* the world repeats: put another player's coordinates on the copy of the world nearest to us */
+function wrapNearCamera(x, z){
+if(INT.active || DUN.active || !isFinite(x) || !isFinite(z)) return [x, z];
+const cx = camera.position.x, cz = camera.position.z;
+return [cx + _qWrap(x, cx), cz + _qWrap(z, cz)];
+}
 function remoteUpdate(id, st){
+if(st && (typeof st.place !== 'string' || st.place === 'out')){ const w = wrapNearCamera(st.x, st.z); st = Object.assign({}, st, { x: w[0], z: w[1] }); }
 let r = REMOTE_PLAYERS.get(id);
 if(!r || (st.form && st.form !== r.formId)) r = remoteSpawn(id, st.form || (r && r.formId) || 'bedouin');
 const now = performance.now()/1000;
@@ -25167,6 +26009,7 @@ window.PlayerNet.onLocalSlash({ t: PVP.lastLocalSlashT, place: localPlaceKey(), 
 }
 function pvpKillLocal(byId){
 if(DUN.deathSeq) return;
+WAR.force = true;
 const fadeEl = document.getElementById('deathFade');
 if(fadeEl){ fadeEl.style.display = 'block'; fadeEl.style.opacity = '0'; }
 DUN.deathSeq = { phase: 'hold', t: 0, holdDur: 2.0, startQuat: camera.quaternion.clone(), holdQuat: camera.quaternion.clone(), fov0: camera.fov,
@@ -25176,7 +26019,7 @@ if(window.PlayerNet && typeof window.PlayerNet.onLocalDeath === 'function'){
 window.PlayerNet.onLocalDeath({ by: byId, rem: {
 place: localPlaceKey(), x: camera.position.x, y: camera.position.y - EYE_HEIGHT, z: camera.position.z,
 yaw: INT.active ? yaw - interiorCal : yaw,
-gold: collectedCount,
+gold: Math.round(Math.max(0, collectedCount - carriedPaintValue())*10),   /* sent in tenths: an ornament is 0.1 */
 heads: { ifrit: collectedHeadTally.ifrit || 0, spriggan: collectedHeadTally.spriggan || 0, bucca: collectedHeadTally.bucca || 0 }
 } });
 }
@@ -25187,7 +26030,8 @@ info = info || {};
 const r = REMOTE_PLAYERS.get(id);
 if(r) formSlash(r.fig);
 if(DUN.deathSeq) return 'ignored';
-const ax = (info.x !== undefined) ? info.x : (r ? r.x : undefined), az = (info.z !== undefined) ? info.z : (r ? r.z : undefined);
+let ax = (info.x !== undefined) ? info.x : (r ? r.x : undefined), az = (info.z !== undefined) ? info.z : (r ? r.z : undefined);
+if(ax !== undefined && az !== undefined && (typeof info.place !== 'string' || info.place === 'out')){ const w = wrapNearCamera(ax, az); ax = w[0]; az = w[1]; }
 if(ax === undefined) return 'ignored';
 const aYaw = (info.yaw !== undefined) ? info.yaw : (r ? r.yaw : 0);
 const aMindor = (info.onMindor !== undefined) ? !!info.onMindor : (r ? r.onMindor : islandIdAt(ax, az) === ISLAND_MINDOR);
@@ -25862,7 +26706,7 @@ let maxR = 0;
 for(const p of pts) maxR = Math.max(maxR, p.x);
 m.userData.radius = maxR;
 m.userData.height = height;
-m.userData.value = 10;
+m.userData.value = 1;
 return m;
 }
 function makeTreasure(){
@@ -25899,7 +26743,7 @@ let maxR = 0;
 for(const p of pts) maxR = Math.max(maxR, p.x);
 m.userData.radius = maxR;
 m.userData.height = height;
-m.userData.value = 1;
+m.userData.value = 0.1;
 return m;
 }
 const COIN_STACK_BASE_HEIGHT = 0.042;
@@ -25913,7 +26757,7 @@ const m = new THREE.Mesh(geo, treasureGoldMat);
 m.castShadow = true;
 m.userData.radius = radius;
 m.userData.height = height;
-m.userData.value = 1;
+m.userData.value = 0.1;
 return m;
 }
 function addHitProxy(item){
@@ -25995,7 +26839,32 @@ if(n === hudHeadsShown) return;
 hudHeadsShown = n;
 hudHeadsNEl.textContent = String(n);
 }
+function paintValueOf(n){ return n <= 27 ? 6 : 12; }   /* big paintings 12, small 6 */
+function carriedPaintValue(){ let v = 0; for(const c of carriedPaintings) v += paintValueOf(c.n); return v; }
+function stashedPaintValue(){ let v = 0; for(const n of stashedPaintings) v += paintValueOf(n); return v; }
+function bankPaintings(){ for(const c of carriedPaintings) stashedPaintings.push(c.n); carriedPaintings.length = 0; }
+/* pay X: gold first (carried, then stashed); paintings are the very last thing touched, cheapest first, and any change comes back as gold */
+function spendGold(X){
+let need = X;
+const gC = Math.max(0, collectedCount - carriedPaintValue()), gS = Math.max(0, stashCount - stashedPaintValue());
+let t = Math.min(gC, need); collectedCount -= t; need -= t;
+t = Math.min(gS, need); stashCount = Math.max(0, stashCount - t); need -= t;
+if(need > 1e-9){
+const pool = [];
+for(const c of carriedPaintings) pool.push({ src: 'c', n: c.n, v: paintValueOf(c.n) });
+for(const n of stashedPaintings) pool.push({ src: 's', n, v: paintValueOf(n) });
+pool.sort((a, b) => a.v - b.v);
+for(const q of pool){
+if(need <= 1e-9) break;
+const change = need < q.v ? q.v - need : 0;
+if(q.src === 'c'){ const i = carriedPaintings.findIndex(c => c.n === q.n); if(i >= 0) carriedPaintings.splice(i, 1); collectedCount = Math.max(0, collectedCount - q.v) + change; }
+else { const i = stashedPaintings.indexOf(q.n); if(i >= 0) stashedPaintings.splice(i, 1); stashCount = Math.max(0, stashCount - q.v) + change; }
+need -= q.v;
+}
+}
+}
 function updateCollectedLabel(){
+collectedCount = Math.round(collectedCount*10)/10; stashCount = Math.round(stashCount*10)/10;   /* ornaments are worth 0.1 */
 syncHeadsHud();
 hudStashEl.textContent = String(stashCount) + 'K';
 hudGoldEl.textContent = String(collectedCount) + 'K';
@@ -26088,18 +26957,111 @@ if(ch.h > topH) topH = ch.h;
 if(ch.h < bottomH) bottomH = ch.h;
 }
 }
-for(const ch of L.chambers){
-const progress = L.spiral
+const rec = dunLootRec(true);
+const progOf = (ch) => L.spiral
 ? (topH > bottomH ? (topH - ch.h) / (topH - bottomH) : 0)
 : (ch.i0 + ch.cw/2) / Math.max(1, W-1);
-if(progress < 2/3){
+const ornCh = [], treCh = [];
+for(const ch of L.chambers) (progOf(ch) < 2/3 ? ornCh : treCh).push(ch);
+const put = (item, ch, blocks, cat) => {
+const b = meshes.length;
+item.userData.cat = cat;
+placeItem(item, ch, blocks);
+return meshes.length > b;
+};
+/* gems: 0, 1 or 2 per dungeon (decided once from the dungeon's position), each a ruby (1 in 3) or a sapphire (2 in 3) */
+const grng = (function(){
+const sh = DUN.returnShrine || {};
+const r = makeRng((Math.imul(Math.round((sh.cx || 0)*10), 83492791) ^ Math.imul(Math.round((sh.cz || 0)*10), 19349663) ^ 0x6a09e667) >>> 0);
+r(); r(); return r;
+})();
+if(!rec || !rec.init){
+/* first visit: lay everything out, then note how much there is */
+let nO = 0, nT = 0;
+for(const ch of ornCh){
 const count = (2 + Math.floor(Math.random()*4)) * 3 * 2;
-for(let k=0;k<count;k++) placeItem(makeOrnamentItem(), ch, false);
-} else {
+for(let k=0;k<count;k++) if(put(makeOrnamentItem(), ch, false, 'orn')) nO++;
+}
+for(const ch of treCh){
 const count = (2 + Math.floor(Math.random()*4)) * 2;
-for(let k=0;k<count;k++) placeItem(makeTreasure(), ch, true);
+for(let k=0;k<count;k++) if(put(makeTreasure(), ch, true, 'tre')) nT++;
+}
+if(rec){
+rec.orn = nO; rec.tre = nT;
+const r0 = grng();
+const nGems = r0 < 1/3 ? 0 : (r0 < 2/3 ? 1 : 2);
+rec.ruby = 0; rec.sapph = 0;
+for(let gi = 0; gi < nGems; gi++){ if(grng() < 0.33) rec.ruby++; else rec.sapph++; }
+rec.init = true;
+}
+} else {
+/* later visits: only what has not been collected is still there */
+const oz = ornCh.length ? ornCh : L.chambers, tz = treCh.length ? treCh : L.chambers;
+for(let k = 0; k < rec.orn; k++) put(makeOrnamentItem(), oz[Math.floor(Math.random()*oz.length)], false, 'orn');
+for(let k = 0; k < rec.tre; k++) put(makeTreasure(), tz[Math.floor(Math.random()*tz.length)], true, 'tre');
+}
+/* gems lie in the lower chambers and never in the pool */
+try{
+if(rec){
+const dry = L.chambers.filter(c => !c.bottom);
+let gpool;
+if(L.spiral) gpool = dry.slice().sort((p, q) => p.h - q.h).slice(0, Math.max(1, Math.ceil(dry.length/3)));
+else {
+gpool = dry.filter(c => (c.i0 + c.cw/2)/Math.max(1, W - 1) >= 2/3);
+if(!gpool.length) gpool = dry.slice().sort((p, q) => (q.i0 + q.cw) - (p.i0 + p.cw)).slice(0, 1);
+}
+const kinds = [];
+for(let k = 0; k < rec.ruby; k++) kinds.push('ruby');
+for(let k = 0; k < rec.sapph; k++) kinds.push('sapphire');
+for(const kind of kinds){
+if(!gpool.length) break;
+const start = Math.floor(Math.random()*gpool.length);
+let ok = false;
+for(let tryI = 0; tryI < gpool.length && !ok; tryI++){
+const item = makeGemLoot(kind);
+ok = put(item, gpool[(start + tryI) % gpool.length], false, kind);
+if(!ok){ item.geometry.dispose(); if(item.userData.hitProxy) item.userData.hitProxy.geometry.dispose(); }
 }
 }
+}
+}catch(err){ console.error('dungeon gems:', err); }
+saveGame();
+}
+function dunLootRec(create){
+const sh = DUN.returnShrine;
+if(!sh || typeof sh.cx !== 'number' || typeof sh.cz !== 'number'){ DUN.lootRec = null; return null; }
+const k = posKey(sh.cx, sh.cz);
+let r = dungeonLoot[k];
+if(!r && create) r = dungeonLoot[k] = { init: false, orn: 0, tre: 0, ruby: 0, sapph: 0 };
+DUN.lootRec = r || null;
+return DUN.lootRec;
+}
+function dunLootTake(cat){
+const r = DUN.lootRec; if(!r || !cat) return;
+if(cat === 'orn' && r.orn > 0) r.orn--;
+else if(cat === 'tre' && r.tre > 0) r.tre--;
+else if(cat === 'ruby' && r.ruby > 0) r.ruby--;
+else if(cat === 'sapphire' && r.sapph > 0) r.sapph--;
+}
+let _gemLootMats = null;
+/* the cut gem from the sword pommels (makeCutGemGeometry), enlarged, lying on its table; ruby 10, sapphire 5 */
+function makeGemLoot(kind){
+if(!_gemLootMats){
+const rm = rubyMat.clone(); rm.emissive = new THREE.Color(0x8a0a20); rm.emissiveIntensity = 0.55;
+const sm = sapphireMat.clone(); sm.emissive = new THREE.Color(0x0a2a9a); sm.emissiveIntensity = 0.55;
+_gemLootMats = { ruby: rm, sapphire: sm };
+}
+const r = 0.16;
+const geo = makeCutGemGeometry(r);
+geo.rotateX(Math.PI);
+geo.translate(0, r*0.55, 0);
+const m = new THREE.Mesh(geo, _gemLootMats[kind]);
+m.castShadow = true;
+m.userData.radius = r;
+m.userData.height = r*1.17;
+m.userData.value = kind === 'ruby' ? 10 : 5;
+m.userData.gem = kind;
+return addHitProxy(m);
 }
 function dunFloorHeight(x,z){
 const CS = DUN.CS, {W,D,H} = DUN;
@@ -26170,11 +27132,14 @@ const i = Math.floor(x/CS), j = Math.floor(z/CS);
 if(j<0||j>=D||i>=W) return true;
 if(i<0) return j !== DUN.entranceJ;
 const c = cells[i][j];
+if(c.solid) return true;
 const lx = x - i*CS, lz = z - j*CS;
-if(lx < DUN_MARGIN && c.walls.w) return true;
-if(lx > CS-DUN_MARGIN && c.walls.e) return true;
-if(lz < DUN_MARGIN && c.walls.n) return true;
-if(lz > CS-DUN_MARGIN && c.walls.s) return true;
+/* tower dungeons also wall off sides that face solid rock / the map edge, and their wall slabs sit inside the cell (full thickness) */
+const dm = DUN.spiral ? Math.max(DUN_MARGIN, WALL_THICK + 0.22) : DUN_MARGIN;
+if(lx < dm && dunEdgeBlocked(i, j, 'w')) return true;
+if(lx > CS-dm && dunEdgeBlocked(i, j, 'e')) return true;
+if(lz < dm && dunEdgeBlocked(i, j, 'n')) return true;
+if(lz > CS-dm && dunEdgeBlocked(i, j, 's')) return true;
 if(DUN.ifrit && DUN.ifrit.fig && !DUN.ifrit.defeated){
 const ifx = DUN.ifrit.fig.position.x, ifz = DUN.ifrit.fig.position.z;
 const rr = IFRIT_BODY_RADIUS + PLAYER_RAD;
@@ -26183,8 +27148,8 @@ if(ddx*ddx + ddz*ddz < rr*rr) return true;
 }
 return false;
 }
-const DUN_BONE_MARGIN = 0.12;
 function dunWallPush(x, y, z){
+const DUN_BONE_MARGIN = dunWallInset() + 0.1;
 const CS = DUN.CS, {W,D,cells} = DUN;
 if(!cells) return null;
 let i = Math.floor(x/CS), j = Math.floor(z/CS);
@@ -26195,10 +27160,10 @@ return [ci*CS + CS/2, cj*CS + CS/2];
 const c = cells[i][j];
 let lx = x - i*CS, lz = z - j*CS;
 let hit = false;
-if(lx < DUN_BONE_MARGIN && c.walls.w){ lx = DUN_BONE_MARGIN; hit = true; }
-if(lx > CS-DUN_BONE_MARGIN && c.walls.e){ lx = CS-DUN_BONE_MARGIN; hit = true; }
-if(lz < DUN_BONE_MARGIN && c.walls.n){ lz = DUN_BONE_MARGIN; hit = true; }
-if(lz > CS-DUN_BONE_MARGIN && c.walls.s){ lz = CS-DUN_BONE_MARGIN; hit = true; }
+if(lx < DUN_BONE_MARGIN && dunEdgeBlocked(i, j, 'w')){ lx = DUN_BONE_MARGIN; hit = true; }
+if(lx > CS-DUN_BONE_MARGIN && dunEdgeBlocked(i, j, 'e')){ lx = CS-DUN_BONE_MARGIN; hit = true; }
+if(lz < DUN_BONE_MARGIN && dunEdgeBlocked(i, j, 'n')){ lz = DUN_BONE_MARGIN; hit = true; }
+if(lz > CS-DUN_BONE_MARGIN && dunEdgeBlocked(i, j, 's')){ lz = CS-DUN_BONE_MARGIN; hit = true; }
 if(!hit) return null;
 return [i*CS + lx, j*CS + lz];
 }
@@ -27707,6 +28672,8 @@ return;
 if(ds.phase === 'respawn'){
 try{ wagonOnRespawn(); }catch(e){}
 collectedCount = 0;
+for(const c of carriedPaintings){ const r = dungeonLoot[c.k]; if(r) r.pn = c.n; }   /* paintings carried when you die go back where they were found */
+carriedPaintings.length = 0;
 collectedHeadTally.ifrit = 0; collectedHeadTally.spriggan = 0; collectedHeadTally.bucca = 0;
 updateCollectedLabel();
 const restoreFov = (ds.ifr && ds.ifr.baseFov !== undefined) ? ds.ifr.baseFov : ds.fov0;
@@ -28027,12 +28994,12 @@ setupReflectionCave(L, scene2);
 DUN.ifrit = null;
 populateTutorialLoot(L, scene2, loot);
 } else if(!isCastleDungeon){
-if(!isCleared){
-populateLoot(L, scene2, lootColliders, loot);
-DUN.ifrit = placeDungeonIfrit(L, scene2);
-} else {
-DUN.ifrit = null;
+if(isCleared && !dunLootRec(false)){
+/* a dungeon cleared before loot was remembered: treat it as fully looted */
+const lr = dunLootRec(true); lr.init = true; lr.orn = 0; lr.tre = 0; lr.ruby = 0; lr.sapph = 0; lr.pn = 0;
 }
+populateLoot(L, scene2, lootColliders, loot);
+DUN.ifrit = isCleared ? null : placeDungeonIfrit(L, scene2);
 } else {
 DUN.ifrit = null;
 DUN.castle = true;
@@ -28047,6 +29014,8 @@ saveGame();
 }
 buildCastleStores(L, scene2, keepOwned);
 }
+if(!questCave && !tutorialDungeon){ try{ dunPaintingAdd(L, scene2); }catch(err){ console.error('dungeon painting:', err); } }
+if(isCastleDungeon && keepOwned){ try{ dunStashPaintings(L, scene2); }catch(err){ console.error('stashed paintings:', err); } }
 if(spiral){
 const bottomCh = L.chambers.find(c => c.bottom);
 if(bottomCh){
@@ -28222,6 +29191,7 @@ setJingleLoop(false);
 setDundunLoop(false);
 DUN.fragment = null; dragFrag = null;
 clearTutorialCollectPrompt(); clearTutorialFragPrompt();
+DUN.paint = null; dragPaint = null;
 DUN.loot = null; DUN.reflection = false; if(DUN.mirror){ try{ DUN.mirror.rt.dispose(); }catch(e){} } DUN.mirror = null; DUN.questMarid = null; DUN.moonMarid = null; DUN.moonAxe = null; DUN.extraColliders = []; DUN.extraBoxes = [];
 DUN.lootColliders = null;
 DUN.ifrit = null;
@@ -28393,6 +29363,8 @@ const t = clock.elapsedTime;
 try{ remoteTick(dt); }catch(e){ console.error('remote players:', e); }
 try{ adlOutTick(dt); }catch(e){ console.error('adella tables:', e); }
 try{ remainsTick(dt); }catch(e){ console.error('remains:', e); }
+try{ paintTick(dt); }catch(e){ console.error('paintings:', e); }
+try{ warchantTick(dt); }catch(e){ console.error('warchant:', e); }
 syncStakeHud();
 syncHeadsHud();
 boatTutorialTick();
@@ -28964,7 +29936,7 @@ if(age > 30) m.material.opacity = 0.5 * (1 - (age-30)/15);
 {
 const nowMoor = territoryIsMoor(camera.position.x/SHORE_AREA_SIZE, camera.position.z/SHORE_AREA_SIZE);
 const nowSea = landSigned(camera.position.x/SHORE_AREA_SIZE, camera.position.z/SHORE_AREA_SIZE) < -0.05;
-const nowLatin = nowMoor && isLatinAt(camera.position.x, camera.position.z);
+const nowLatin = nowMoor && (isLatinAt(camera.position.x, camera.position.z) || islandIdAt(camera.position.x, camera.position.z) === ISLAND_PELIGO);   /* Peligo shares the Latin sky, not the Keru mist */
 if(nowMoor !== moorSkyActive || nowSea !== seaSkyActive || nowLatin !== latinSkyActive){
 moorSkyActive = nowMoor;
 seaSkyActive = nowSea;
@@ -29101,7 +30073,12 @@ const hud = document.createElement('div');
 hud.style.cssText = "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:99998;pointer-events:none;user-select:none;white-space:nowrap;color:rgba(255,255,255,0.5);font-size:10px;letter-spacing:1.6px;text-transform:uppercase;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;text-shadow:0 1px 4px rgba(0,0,0,0.9)";
 const feed = document.createElement('div');
 feed.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:99998;font:14px system-ui,sans-serif;color:#fff;text-align:center;pointer-events:none;text-shadow:0 1px 3px #000';
-function mount(){ document.body.appendChild(hud); document.body.appendChild(feed); setHud('connecting'); }
+function syncHudVisibility(){
+  const ov = document.getElementById('overlay');
+  const show = !!ov && getComputedStyle(ov).display !== 'none';
+  hud.style.display = show ? '' : 'none';
+}
+function mount(){ document.body.appendChild(hud); document.body.appendChild(feed); setHud('connecting'); syncHudVisibility(); setInterval(syncHudVisibility, 250); }
 function setHud(st){
   hud.textContent = st === 'online' ? 'Online \u00b7 ' + count + (count === 1 ? ' player' : ' players') : st === 'connecting' ? 'Connecting' : 'Offline \u00b7 retrying';
 }
