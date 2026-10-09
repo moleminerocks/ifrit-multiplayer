@@ -177,7 +177,7 @@ function makeCorpse(victimId, rem) {
   const x = num(rem.x), y = num(rem.y), z = num(rem.z);
   if (x === undefined || y === undefined || z === undefined) return;
   const place = (typeof rem.place === 'string' && rem.place.length <= 64) ? rem.place : 'out';
-  const gold = intIn(rem.gold, 0, 100000) || 0;
+  const gold = intIn(rem.gold, 0, 100000000)   // tenths of a unit (an ornament is 0.1) || 0;
   const items = [];
   const tre = Math.floor(gold / 10), orn = gold % 10;
   const nT = Math.min(tre, 40);
