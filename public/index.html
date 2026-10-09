@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"> 
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -25859,7 +25859,8 @@ REMOTE_PLAYERS.delete(id);
 function wrapNearCamera(x, z){
 if(INT.active || DUN.active || !isFinite(x) || !isFinite(z)) return [x, z];
 const cx = camera.position.x, cz = camera.position.z;
-return [cx + _qWrap(x, cx), cz + _qWrap(z, cz)];
+const wr = (a, b) => { const d = a - b; return ((d + WORLD_SIZE/2) % WORLD_SIZE + WORLD_SIZE) % WORLD_SIZE - WORLD_SIZE/2; };
+return [cx + wr(x, cx), cz + wr(z, cz)];
 }
 function remoteUpdate(id, st){
 if(st && (typeof st.place !== 'string' || st.place === 'out')){ const w = wrapNearCamera(st.x, st.z); st = Object.assign({}, st, { x: w[0], z: w[1] }); }
