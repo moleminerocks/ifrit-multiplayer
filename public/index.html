@@ -307,8 +307,8 @@
   </div>
   <div id="hud-gold">0K</div>
   <div id="hud-heads"><span id="hud-heads-n">0</span><span class="hud-face"><i></i><i></i><i></i></span></div>
-  <div id="hud-stake">Stake: 0K</div>
 </div>
+<div id="hud-stake">Stake: 0K</div>
 <button id="hud-fullscreen-btn" aria-label="Fullscreen" title="Fullscreen">
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1" stroke-linecap="square">
     <polyline points="7,3 3,3 3,7"/>
@@ -3843,7 +3843,7 @@ continue;
 if(feetY !== undefined && d.roofY !== undefined && feetY >= d.roofY - 0.3){
 const pin = d.roofInnerHalf;
 if(pin !== undefined && (Math.abs(lx) > pin || Math.abs(lz) > pin)) return true;
-if(d.domeR !== undefined && Math.hypot(lx, lz) < d.domeR) return true;
+if(d.domeR !== undefined && Math.hypot(lx, lz) < d.domeR && (d.domeTopY === undefined || feetY < d.domeTopY)) return true;
 continue;
 }
 if(d.foundationHalfW !== undefined && feetY !== undefined
@@ -11168,6 +11168,7 @@ if(m.gameId === ADL_OUT.gameId && I.adlGameLive) adlOutWinByForfeit(I);
 break;
 }
 }
+function adlSeatedAny(){ return adlOutLocked() || !!(INT.active && INT.I && INT.I.isBetting && INT.I.adlBoardLocked); }
 function adlOutCanSit(){
 if(INT.active || DUN.active || DUN.deathSeq || mapMode) return false;
 if(mountedHorse || boardedBoat || CARPET.mounted || (wagonState && wagonState.aboard)) return false;
@@ -11599,6 +11600,7 @@ return !paintHitsObstacle(obst, wl, t0, t1, yc, h);
 function paintPlaceOnWalls(scene, walls, picks, rng, obst, maxN){
 const placed = [], out = [];
 for(const n of picks){
+if(n === undefined || n === null || !PAINT_SPECS[n]) continue;
 if(maxN !== undefined && out.length >= maxN) break;
 const spec = PAINT_SPECS[n], w = spec[0], h = spec[1], bigP = h >= 1.0;
 let best = null;
@@ -11739,6 +11741,8 @@ const obst = paintObstacles(scene, w, d, I.h || STOREY_H);
 const mine = !!(door.owned || door.playerOwned);   /* your own abode hangs only the paintings you have stashed */
 /* castles (including abandoned keeps) and every building on Alazia hang nothing unless you own them */
 if(!mine && (spec.kind === 'keep' || islandIdAt(kx, kz) === ISLAND_ALAZIA)) return;
+/* anything still for sale hangs nothing */
+if(!mine && door.forSale) return;
 const myPicks = () => stashedPaintings.filter(q => q !== 38);
 const smalls = paintShuffle(PAINT_SMALL, rng), bigs = paintShuffle(PAINT_BIG, rng);
 const takePicks = (count, bigCount) => {
@@ -17860,6 +17864,7 @@ porchOutX: housePorch.outX,
 houseGroup: house,
 roofY: gy + h,
 domeR: (isLibraryPlot && !inMoor) ? libraryDomeR : undefined,
+domeTopY: (isLibraryPlot && !inMoor) ? gy + h + 0.12 + libraryDomeR*1.4*1.15 + 0.6 : undefined,
 hinge: shell.hinge, leaf: shell.leaf, swing: 0,
 isAuthor: isAuthorPlot || isLibraryPlot, isForge: isForgePlot, isCartographer: isCartographerPlot || isLibraryPlot, isBetting: isBettingPlot,
 isLibrary: isLibraryPlot,
@@ -22706,6 +22711,7 @@ else if(inTopStrip(e.clientY)) handleMovementZonePress('run');
 else handleMovementZonePress('walk');
 }
 if(e.pointerType === 'mouse' && !gyroConfirmed){
+if(adlSeatedAny()) return;
 if(!pointerLocked){
 try{ const pl = renderer.domElement.requestPointerLock(); if(pl && pl.catch) pl.catch(() => {}); }catch(err){}
 return;
@@ -27002,7 +27008,14 @@ const hudGoldEl = document.getElementById('hud-gold');
 const hudStakeEl = document.getElementById('hud-stake');
 const adlSubEl = document.getElementById('adl-subtitle');
 let adlSubShown = '', adlOverSeen = null, adlOverAt = 0, adlOverGone = false;
+let adlFreedMouse = false;
 function adlSubtitleTick(){
+const seatedNow = adlSeatedAny();
+if(seatedNow && document.pointerLockElement){ try{ document.exitPointerLock(); }catch(e){} adlFreedMouse = true; }
+else if(!seatedNow && adlFreedMouse){
+adlFreedMouse = false;
+if(mouseControls && !document.pointerLockElement){ try{ const pl = renderer.domElement.requestPointerLock(); if(pl && pl.catch) pl.catch(() => {}); }catch(e){} }
+}
 let txt = '';
 const I = adlCurI();
 const st = I && I.adlState;
