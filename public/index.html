@@ -4322,7 +4322,7 @@ respawnAtCastle = worldMatches && !!savedGame.respawnAtCastle && !!ownedCastleKe
 lastAbode = (worldMatches && savedGame.lastAbode && typeof savedGame.lastAbode === 'object') ? savedGame.lastAbode : null;
 if(!lastAbode){
 if(ownsCastle && ownedCastleKey){ const pk = ownedCastleKey.split(','); const kx = +pk[0], kz = +pk[1]; if(isFinite(kx) && isFinite(kz)) lastAbode = { island: islandIdAt(kx, kz), kind: 'castle' }; }
-else if(playerHouse) lastAbode = { island: islandIdAt(playerHouse.x, playerHouse.z), kind: playerHouse.typeKey === 'riad' ? 'riad' : 'house' };
+else if(playerHouse) lastAbode = { island: islandIdAt(playerHouse.x, playerHouse.z), kind: playerHouse.typeKey === 'riad' ? 'riad' : (playerHouse.typeKey === 'manor' ? 'manor' : 'house') };
 }
 if(lastAbode && (lastAbode.island === ISLAND_MINDOR || lastAbode.island === ISLAND_PELIGO)) lastAbode = null;
 lastSpot = (worldMatches && savedGame.lastSpot && typeof savedGame.lastSpot === 'object') ? savedGame.lastSpot : null;
@@ -11677,7 +11677,7 @@ const t0 = t - w/2, t1 = t + w/2;
 if(wl.excl){ for(const e of wl.excl) if(t1 > e[0] - 0.1 && t0 < e[1] + 0.1) return false; }
 if(wl.fit){
 const top = wl.fit(t0, t1);
-if(yc + h/2 + 0.28 > top || yc - h/2 < (wl.minY !== undefined ? wl.minY : 0.9)) return false;
+if(yc + h/2 + 0.28 > top || yc - h/2 < (wl.minYAt ? wl.minYAt(t0, t1) : (wl.minY !== undefined ? wl.minY : 0.9))) return false;
 } else {
 const base = wl.base ? wl.base(t0, t1) : (wl.y0 || 0);
 if(yc - h/2 < base + (bigP ? 0.5 : 0.9) || yc + h/2 > (wl.yTop || STOREY_H) - 0.25) return false;
@@ -11689,9 +11689,10 @@ if(t1 > p.t0 - 0.4 && t0 < p.t1 + 0.4 && yc + h/2 > p.y0 - 0.3 && yc - h/2 < p.y
 return !paintHitsObstacle(obst, wl, t0, t1, yc, h);
 }
 function paintPlaceOnWalls(scene, walls, picks, rng, obst, maxN){
-const placed = [], out = [];
+const placed = [], out = [], usedN = new Set();
 for(const n of picks){
-if(n === undefined || n === null || !PAINT_SPECS[n]) continue;
+if(n === undefined || n === null || !PAINT_SPECS[n] || usedN.has(n)) continue;   /* a building never hangs the same painting twice */
+usedN.add(n);
 if(maxN !== undefined && out.length >= maxN) break;
 const spec = PAINT_SPECS[n], w = spec[0], h = spec[1], bigP = h >= 1.0;
 let best = null;
@@ -11835,7 +11836,7 @@ const latinRoyal = spec.kind === 'keep' && !!door.isKingKeep && islandIdAt(kx, k
 if(!mine && !latinRoyal && (spec.kind === 'keep' || islandIdAt(kx, kz) === ISLAND_ALAZIA)) return;
 /* anything still for sale hangs nothing */
 if(!mine && door.forSale) return;
-const myPicks = () => stashedPaintings.filter(q => q !== 38);
+const myPicks = () => stashedPaintings.filter((q, i, a) => q !== 38 && a.indexOf(q) === i);   /* never the same painting twice */
 const smalls = paintShuffle(PAINT_SMALL, rng), bigs = paintShuffle(PAINT_BIG, rng);
 const takePicks = (count, bigCount) => {
 const picks = [];
@@ -11900,6 +11901,7 @@ return;
 const smallPool = paintShuffle(PAINT_SMALL, rng);
 const largePool = paintShuffle(PAINT_BIG.slice(), rng);
 const useXL = rng() < 0.4;                       /* the huge 4 x 4 (38) takes the big south-wall spot when it is drawn */
+if(useXL){ const k38 = largePool.indexOf(38); if(k38 >= 0) largePool.splice(k38, 1); }   /* ...and must not also be dealt to another spot */
 let si = 0, li = 0;
 for(const sl of tpl){
 let n, x = sl.x*sx, y = sl.y > 4 ? sl.y*sy : sl.y, z = sl.z*sz, yaw = sl.yaw;
@@ -11930,6 +11932,7 @@ return !nb || !!nb.solid;
 }
 /* which stashed painting goes in which castle spot: small ones in the small spots, 28-37 in the large spots, 38 in the big south-wall spot; whatever does not fit overflows into the keep's dungeon */
 function castleKeepAssign(stash){
+stash = stash.filter((q, i, a) => a.indexOf(q) === i);   /* never the same painting twice */
 const smalls = stash.filter(n => n <= 12), larges = stash.filter(n => n >= 13);
 const slots = CASTLE_PAINT_SLOTS.map(() => 0);
 let si = 0, li = 0;
@@ -14226,8 +14229,14 @@ if(!isFinite(top) || lo < cmin - 0.01 || hi > cmax + 0.01) return 0;
 return top;
 };
 const mw = [];
-mw.push({ ox: -xEdge, oz: wideInset + 0.8, dx: 0, dz: -1, len: 2*wideInset + 1.6, yaw: Math.PI/2, y0: 0, yTop: H2, excl: [], fit: legFit(0, wideInset + 0.8, -1), minY: 0.7 });
-mw.push({ ox: xEdge, oz: -wideInset - 0.8, dx: 0, dz: 1, len: 2*wideInset + 1.6, yaw: -Math.PI/2, y0: 0, yTop: H2, excl: [], fit: legFit(2, -wideInset - 0.8, 1), minY: 0.7 });
+/* the granite plinth and its two steps run along the foot of these faces (z from the back to 1.0 past the middle): a mirror there must clear them */
+const plinthMinY = (oz, dz) => (t0, t1) => {
+if(desertRoyal) return 0.7;
+const za = oz + dz*t0, zb = oz + dz*t1, zlo = Math.min(za, zb), zhi = Math.max(za, zb);
+return (zhi > zFront - 0.3 && zlo < 1.0 + 0.3) ? PL_H + 0.25 : 0.7;
+};
+mw.push({ ox: -xEdge, oz: wideInset + 0.8, dx: 0, dz: -1, len: 2*wideInset + 1.6, yaw: Math.PI/2, y0: 0, yTop: H2, excl: [], fit: legFit(0, wideInset + 0.8, -1), minY: 0.7, minYAt: plinthMinY(wideInset + 0.8, -1) });
+mw.push({ ox: xEdge, oz: -wideInset - 0.8, dx: 0, dz: 1, len: 2*wideInset + 1.6, yaw: -Math.PI/2, y0: 0, yTop: H2, excl: [], fit: legFit(2, -wideInset - 0.8, 1), minY: 0.7, minYAt: plinthMinY(-wideInset - 0.8, 1) });
 mw.push({ ox: hw - 0.075, oz: hd - 0.075, dx: -1, dz: 0, len: w - 0.15, yaw: Math.PI, y0: 0, yTop: H2, excl: [[hw - DOOR_W/2 - 0.5, hw + DOOR_W/2 + 0.5]], minY: 0.7 });
 if(desertRoyal){
 mw.push({ ox: -xEdge, oz: zFront, dx: 1, dz: 0, len: 2*xEdge, yaw: 0, y0: 0, yTop: H2, excl: [[xEdge - TUN_R - 0.2, xEdge + TUN_R + 0.2]], fit: legFit(1, -xEdge, 1), minY: 0.7 });
@@ -14726,7 +14735,17 @@ if(I.isKeep && I.stairs && tz !== 1 && INT.active && INT.I === I){
 /* stairs far above your feet are a wall, not a step: only a low first step can lift you */
 const rawAt = (qx, qz, pad) => { let r0 = 0; for(const sp of I.stairs){ const rr = sp.r + pad; if(sp.y > r0 && Math.abs(qx - sp.x) <= rr && Math.abs(qz - sp.z) <= rr) r0 = sp.y; } return r0; };
 const skipMouth = I.tunnel && Math.abs(x) < I.tunnel.hw;
-if(!skipMouth && rawAt(x, z, 0.4) - rawAt(camera.position.x, camera.position.z, 0) > 1.3) return true;
+if(!skipMouth){
+/* a stair stands as a wall only when it is more than a step above the ground under you. Its wall zone reaches 0.4 past the (generous) tread squares,
+   so you can end up inside that zone (drop off the inner edge, or land beside the stone): there, any move that doesn't push deeper in must stay free, or you are jammed */
+const hereY = rawAt(camera.position.x, camera.position.z, 0);
+const margin = (qx, qz) => { let m = Infinity; for(const sp of I.stairs){ if(sp.y - hereY <= 1.3) continue; const mm = Math.max(Math.abs(qx - sp.x) - sp.r, Math.abs(qz - sp.z) - sp.r); if(mm < m) m = mm; } return m; };
+const mT = margin(x, z);
+if(mT < 0.4){
+const mH = margin(camera.position.x, camera.position.z);
+if(!(mH < 0.4 && mT >= mH - 1e-3)) return true;
+}
+}
 }
 if(I.odalisque && I.odalisque.userData.torsoCenter){
 const tc = I.odalisque.userData.torsoCenter;
@@ -17675,7 +17694,7 @@ doorAngle: door.angle, doorX: door.cx, doorZ: door.cz
 };
 ownedHomes = ownedHomes.filter(h => !(h.x === playerHouse.x && h.z === playerHouse.z)); ownedHomes.push(playerHouse);
 respawnAtCastle = false;
-noteAbode(islandIdAt(playerHouse.x, playerHouse.z), playerHouse.typeKey === 'riad' ? 'riad' : 'house');
+noteAbode(islandIdAt(playerHouse.x, playerHouse.z), playerHouse.typeKey === 'riad' ? 'riad' : (playerHouse.typeKey === 'manor' ? 'manor' : 'house'));
 saveGame();
 const d = fig.userData.deal;
 if(d){
@@ -19067,7 +19086,8 @@ scene.add(odalisqueRef);
 window.__odalisqueRef = odalisqueRef;
 window.__knightGuard = guard;
 }
-function buildMamlukFigure(clothColor){
+function buildMamlukFigure(clothColor, opts){
+opts = opts || {};
 const MAMLUK_CLOTH = (clothColor !== undefined && clothColor !== null) ? clothColor : 0x76521c;
 const mamluk = createFigure(true, true, false, false, false, MAMLUK_CLOTH);
 const neckChain = mamluk.userData.chains.find(c => c.kind === 'neck');
@@ -19121,6 +19141,7 @@ o.userData.isShin || o.userData.isThigh || o.userData.isKnee)){
 o.material = steelMat;
 }
 });
+if(opts.noSword) return mamluk;   /* a player form carries its own weapon in hand */
 const scimitar = makeSword();
 const SCIMITAR_FORWARD = 0.30;
 const BLADE_LEFT_TILT = 15 * Math.PI/180;
@@ -23054,17 +23075,18 @@ sheatheSwipeAccumDy = 0;
 }
 if(tryGrabAdellaPiece(e)) return;
 if(tryGrabPubBottle(e)) return;
-if(inBottomStrip(e.clientY)) retreatZone = true;
+/* movement strips are a touch idea: with a mouse the (frozen, pointer-locked) clientY must never turn a click into retreat/run */
+if(e.pointerType !== 'mouse' && inBottomStrip(e.clientY)) retreatZone = true;
 if(tryGrabWallSword(e)) return;
 if(tryGrabSword(e)) return;
 if(tryGrabSword2(e)) return;
 if(tryGrabSword3(e)) return;
+if(tryGrabMoonAxe(e)) return;   /* like the forge swords: even with a sword drawn, and before the sack items */
 if(tryPressBangle(e)) return;
 if(!swordDrawn){
 try{ if(tryGrabMapItem(e)) return; }catch(err){ mapiReportError('map grab:', err); MAPI.drag = null; }
 if(tryGrabCarpet(e)) return;
 if(tryGrabCarpetSack(e)) return;
-if(tryGrabMoonAxe(e)) return;
 if(tryGrabBookPart(e)) return;
 if(tryGrabFragment(e)) return;
 if(tryGrabRemains(e)) return;
@@ -23082,9 +23104,11 @@ if(tryMountHorse(e)) return;
 if(tryGrabLimb(e)) return;
 }
 tryKnockDoor(e);
+if(e.pointerType !== 'mouse'){
 if(inBottomStrip(e.clientY)) retreatZone = true;
 else if(inTopStrip(e.clientY)) runZone = true;
-if(tutorialStage === 2){
+}
+if(tutorialStage === 2 && e.pointerType !== 'mouse'){
 if(inBottomStrip(e.clientY)) handleMovementZonePress('retreat');
 else if(inTopStrip(e.clientY)) handleMovementZonePress('run');
 else handleMovementZonePress('walk');
@@ -24044,9 +24068,26 @@ function checkSwordVsMarid(){
 const M = DUN.questMarid;
 if(!M || M.dead || !M.fig.visible || !story.maridHeard || M.state !== 'mirrored' || DUN.deathSeq || (M.confront && !M.confront.done)) return;
 if(!(equippedSword && canSlayAll(equippedSword.userData.swordVariant))) return;
-const dist = Math.hypot(camera.position.x - M.fig.position.x, camera.position.z - M.fig.position.z);
-if(dist < IFRIT_LOCK_DIST*1.6) maridDefeat();
+/* Marid is a scaled-up ifrit: measure to its head and scale the reach with its size */
+const hp = maridHeadWorld(M);
+const sc = maridSizeFactor(M);
+const dist = Math.hypot(camera.position.x - hp.x, camera.position.z - hp.z);
+const floorDy = Math.abs(dunFloorHeight(M.fig.position.x, M.fig.position.z) - dunFloorHeight(camera.position.x, camera.position.z));
+if(dist < IFRIT_LOCK_DIST*sc && floorDy < IFRIT_VERTICAL_LOCK_LIMIT*sc) maridDefeat();
 }
+const _maridHeadV = new THREE.Vector3(), _maridHeadBox = new THREE.Box3();
+function maridSizeFactor(M){ return Math.max(1, M.fig.scale.x / 2.8); }
+function maridHeadWorld(M){
+const fig = M.fig, hm = fig.userData.headMesh;
+fig.updateMatrixWorld(true);
+if(hm){
+_maridHeadBox.setFromObject(hm);
+if(isFinite(_maridHeadBox.min.y) && _maridHeadBox.max.y > _maridHeadBox.min.y) return _maridHeadBox.getCenter(_maridHeadV);
+return hm.getWorldPosition(_maridHeadV);
+}
+return _maridHeadV.set(fig.position.x, fig.position.y + 4*fig.scale.x/2.8, fig.position.z);
+}
+
 function reflectionCaveTick(dt, t){
 const M = DUN.questMarid; if(!M) return;
 if(M.dead) return;
@@ -24157,7 +24198,7 @@ else { if(M.wasMoving){ rf.userData.walkState = { phase: 0 }; M.wasMoving = fals
 lowerIfritArms(rf, 40, 10);
 } else {
 if(PVP.mirrorSlash){ PVP.mirrorSlash = false; formSlash(rf); }
-updatePlayerForm(rf, { moving, cloth: false, drawn: !!swordDrawn }, dtm);
+updatePlayerForm(rf, { moving, cloth: false, drawn: !!swordDrawn, weapon: localWeaponVariant() }, dtm);
 }
 const sackMode = false;
 rf.visible = !sackMode;
@@ -24235,6 +24276,10 @@ const rng = makeRng(((Math.round(kx*10))*73856093) ^ ((Math.round(kz*10))*193496
 for(let i = 0; i < 5; i++) rng();
 const w = I.w, d = I.d, hw = w/2, hd = d/2;
 const obst = paintObstacles(I.scene, w, d, I.h || STOREY_H);
+const MIRROR_PAINT_GAP = 1.0;   /* clear space kept between a mirror and any painting, along the wall and above/below */
+/* paintings hung anywhere (e.g. on the keep's stair-block faces, which sit well away from the outer walls) are never covered by a mirror */
+I.scene.updateMatrixWorld(true);
+I.scene.traverse(o => { if(o.userData && o.userData.paint){ const pb = new THREE.Box3().setFromObject(o); if(!pb.isEmpty()) obst.push(pb.expandByScalar(MIRROR_PAINT_GAP)); } });
 let walls = [], count = 1;
 if(spec.kind === 'keep'){
 walls = (I.mirrorWalls || []).slice(); count = 5;
@@ -24271,7 +24316,7 @@ for(const wl of walls){
 const half = MW/2 + 0.3;
 if(wl.len < 2*half) continue;
 const onWall = placed.filter(p => p.wl === wl).length;
-const levels = wl.yc ? [wl.yc] : [1.55, 1.45, 1.35];
+const levels = wl.yc ? [wl.yc] : (wl.minYAt ? [1.55, 1.45, 1.35, 1.95, 2.15, 2.35] : [1.55, 1.45, 1.35]);   /* the plinth faces also get higher levels, to hang above the plinth */
 for(const yc of levels){
 let runStart = null, last = null;
 const runs = [];
@@ -24362,7 +24407,9 @@ if(moving){ updateIfritWalk(rf, dtm*2); IMIR.wasMoving = true; }
 else { if(IMIR.wasMoving){ rf.userData.walkState = { phase: 0 }; IMIR.wasMoving = false; } updateIfritWalk(rf, 0); }
 lowerIfritArms(rf, 40, 10);
 } else {
-updatePlayerForm(rf, { moving, cloth: false, drawn: !!swordDrawn }, dtm);
+/* the reflection swings when you do (a fresh slash only: never a stale one from outdoors) */
+if(PVP.lastLocalSlashT !== IMIR.slashSeen){ IMIR.slashSeen = PVP.lastLocalSlashT; if(pvpNow() - PVP.lastLocalSlashT < 0.25) formSlash(rf); }
+updatePlayerForm(rf, { moving, cloth: false, drawn: !!swordDrawn, weapon: localWeaponVariant() }, dtm);
 }
 rf.visible = true;
 const hid = [];
@@ -26466,6 +26513,12 @@ const bc = bb.getCenter(new THREE.Vector3());
 axe.position.set(cx - bc.x, topY + 0.02 - bb.min.y, cz - bc.z);
 axe.userData.restClear = axe.position.y - (topY + 0.02 - 0.02);
 axe.userData.chaise = { x: cx, z: cz, topY };
+/* a fat invisible hit-box: the haft is only 4 cm thick, far too fine to land a fixed centre crosshair on */
+{
+const proxy = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.95, 0.34), new THREE.MeshBasicMaterial({ visible: false }));
+proxy.position.set(0.16, 0.55, 0);
+axe.add(proxy); axe.userData.proxy = proxy;
+}
 scene.add(axe);
 DUN.moonAxe = axe;
 }
@@ -26481,9 +26534,9 @@ return true;
 function dragMoonAxeBy(dx, dy){
 if(!dragMoonAxe) return;
 const s = dragMoonAxe.axe;
-const tg = dragPlaneFollow(dragMoonAxe, s.position.x, s.position.z, s.position.y);
+const tg = dragPlaneFollow(dragMoonAxe, s.position.x, s.position.z, s.position.y + 0.7);   /* follow plane raised: a flat low one needs an extreme look-down to bring it in */
 if(tg){ s.position.x = tg[0]; s.position.z = tg[1]; }
-const near = Math.hypot(s.position.x - camera.position.x, s.position.z - camera.position.z) < 0.95;
+const near = Math.hypot(s.position.x - camera.position.x, s.position.z - camera.position.z) < 1.35;
 if(near && !s.userData.collecting){ s.userData.collecting = true; s.rotation.x = Math.PI/2 - 0.55; }
 else if(!near && s.userData.collecting){ s.userData.collecting = false; s.rotation.x = Math.PI/2; }
 }
@@ -26493,6 +26546,7 @@ const s = dragMoonAxe.axe;
 if(s.userData.collecting){
 s.userData.collecting = false;
 s.rotation.set(0, 0, 0);
+if(s.userData.proxy){ s.remove(s.userData.proxy); s.userData.proxy.geometry.dispose(); s.userData.proxy = null; }
 if(swordEquipped) equipSword2(s); else equipSword(s);
 DUN.moonAxe = null;
 story.moonAxeTaken = true;
@@ -26512,19 +26566,27 @@ dragMoonAxe = null;
    Forms: bedouin, keru, latin, sultan, king, queen, ifrit.
    Each form figure has three looks: idle, run, slash (always a standard silver scimitar).
    Online API (for the multiplayer layer) is exposed as window.PlayerForms - see the bottom of this block. */
-const FORM_IDS = ['bedouin', 'keru', 'latin', 'sultan', 'king', 'queen', 'ifrit'];
+const FORM_IDS = ['bedouin', 'keru', 'latin', 'sultan', 'king', 'queen', 'ifrit', 'mamluk', 'knight'];
 const FORM_SLASH_DUR = 0.75;
 function noteAbode(island, kind){
 if(island === ISLAND_MINDOR || island === ISLAND_PELIGO || !island) return;
 lastAbode = { island, kind };
 }
+/* a castle owner on Galio (Keru's keeps can't be owned) is a queen or a king: settled once by the castle's own position, so it never changes between sessions */
+function castleRegalForm(){
+const key = String(ownedCastleKey || (lastAbode && lastAbode.island) || 'q');
+let h = 7; for(let i = 0; i < key.length; i++) h = (h*31 + key.charCodeAt(i)) >>> 0;
+return (h & 1) ? 'king' : 'queen';
+}
 function localFormId(){
 if((story.maridEntered || story.maridHeard) && !story.maridKilled) return 'ifrit';
 const a = lastAbode;
 if(!a) return 'bedouin';
-if(a.island === ISLAND_ALAZIA) return (a.kind === 'riad' || a.kind === 'castle') ? 'sultan' : 'bedouin';
-if(a.island === ISLAND_KERU) return a.kind === 'castle' ? 'king' : 'keru';
-if(a.island === ISLAND_GALIO) return a.kind === 'castle' ? 'queen' : 'latin';
+/* Alazia's big house is the riad; on Keru and Galio (no riads) it is the manor, the largest house there. Older saves recorded a manor as a plain house, so check the house itself too. */
+const bigHome = a.kind === 'riad' || a.kind === 'manor' || (a.kind === 'house' && !!playerHouse && playerHouse.typeKey === 'manor' && islandIdAt(playerHouse.x, playerHouse.z) === a.island);
+if(a.island === ISLAND_ALAZIA) return a.kind === 'castle' ? 'sultan' : (a.kind === 'riad' ? 'mamluk' : 'bedouin');
+if(a.island === ISLAND_KERU) return a.kind === 'castle' ? castleRegalForm() : (bigHome ? 'knight' : 'keru');
+if(a.island === ISLAND_GALIO) return a.kind === 'castle' ? castleRegalForm() : (bigHome ? 'knight' : 'latin');
 return 'bedouin';
 }
 function formBuildBase(id){
@@ -26548,6 +26610,10 @@ fig.userData.goldMat = goldMat;
 fig.scale.setScalar(0.9);
 } else if(id === 'king'){
 fig = buildKnightFigure({ clothColor: 0x4b1d6b, goldHelmet: true, noSword: true });
+} else if(id === 'mamluk'){
+fig = buildMamlukFigure(0x76521c, { noSword: true });
+} else if(id === 'knight'){
+fig = buildKnightFigure({ clothColor: 0x76521c, noSword: true });
 } else if(id === 'ifrit'){
 fig = createFigure(false, false, true);
 } else {
@@ -26569,17 +26635,49 @@ rsword.traverse(o => { if(o.isMesh) o.castShadow = true; });
 rsword.visible = false;
 fig.add(rsword);
 fig.userData.realArm = real; fig.userData.realSword = rsword;
+fig.userData.weaponKey = 'silver'; fig.userData.weaponGrip = formWeaponGrip(rsword);
 return;
 }
 }
 const arm = buildPointArm(fig, 1);
 const sword = makeSword();
-sword.position.set(0, -0.44, 0);
 sword.rotation.x = Math.PI;
+fig.userData.weaponGrip = formWeaponGrip(sword);
+sword.position.set(0, FORM_HAND_Y + fig.userData.weaponGrip, 0);   /* the middle of the grip sits in the hand, not the pommel */
 sword.traverse(o => { if(o.isMesh) o.castShadow = true; });
 arm.elbowPivot.add(sword);
 arm.pivot.visible = false;
 fig.userData.swordArm = arm;
+fig.userData.armSword = sword; fig.userData.weaponKey = 'silver';
+}
+/* where (up the weapon's own axis, from its origin) the middle of its grip lies */
+function formWeaponGrip(sw){
+const v = sw.userData.swordVariant, pom = sw.userData.pommelY || 0;
+if(isClaymoreVariant(v)) return pom + 0.22;
+if(isAxeVariant(v)) return pom + 0.26;
+return pom + 0.11;
+}
+function formClassWeapon(id){ return (id === 'king' || id === 'queen' || id === 'knight') ? 'claymore' : 'silver'; }
+const FORM_HAND_Y = -0.39;   /* the centre of the closed hand, down the forearm from the elbow */
+/* swap the weapon a figure holds (the one the local player has drawn, or the one a remote player reports) */
+function formSetWeapon(fig, variant){
+const U = fig.userData;
+if(!variant || variant === U.weaponKey) return;
+if(!U.gearDone) formAttachGear(fig);
+const nw = makeSwordByVariant(variant);
+nw.traverse(o => { if(o.isMesh) o.castShadow = true; });
+U.weaponGrip = formWeaponGrip(nw);
+if(U.realSword){
+nw.visible = U.realSword.visible;
+if(U.realSword.parent) U.realSword.parent.add(nw);
+if(U.realSword.parent) U.realSword.parent.remove(U.realSword);
+U.realSword = nw;
+} else if(U.armSword){
+const par = U.armSword.parent;
+if(par){ par.remove(U.armSword); nw.rotation.x = Math.PI; nw.position.set(0, FORM_HAND_Y + U.weaponGrip, 0); par.add(nw); }
+U.armSword = nw;
+} else return;
+U.weaponKey = variant;
 }
 function createPlayerForm(id, opts){
 const fig = formBuildBase(id);
@@ -26645,6 +26743,8 @@ let slashing = U.slashT >= 0;
 if(slashing){ U.slashT += dt; if(U.slashT >= FORM_SLASH_DUR){ U.slashT = -1; slashing = false; } }
 const moving = !!st.moving;
 if(moving) U.runPhase += dt*Math.PI*2*1.6;
+/* other players carry their class weapon (knights, kings and queens a claymore); only your own reflection shows the weapon you actually hold */
+formSetWeapon(fig, st.weapon || formClassWeapon(U.formId));
 const drawn = !!st.drawn, armed = slashing || drawn;
 const key = (moving ? 'R' : 'I') + (slashing ? 'S' : '') + (drawn ? 'D' : '');
 if(key !== U.formKey){
@@ -26664,8 +26764,9 @@ ra.segments[1].dir.copy(ra.segments[0].dir).applyAxisAngle(PX, a2*1.2);
 ra.segments[2].dir.copy(ra.segments[1].dir);
 rebuildChainAuto(ra);
 const wr = ra.segments[1].jointMesh.position, tp = ra.segments[2].jointMesh.position;
-U.realSword.position.copy(wr).lerp(tp, 0.5);
-U.realSword.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tp.clone().sub(wr).normalize());
+const hd2 = tp.clone().sub(wr).normalize();
+U.realSword.position.copy(wr).lerp(tp, 0.5).addScaledVector(hd2, -(U.weaponGrip || 0.11));   /* grip centre in the hand */
+U.realSword.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), hd2);
 } else if(U.swordArm){
 U.swordArm.pivot.rotation.x = a1;
 U.swordArm.elbowPivot.rotation.x = a2;
@@ -26853,6 +26954,7 @@ const mv = Math.hypot(camera.position.x - prev.x, camera.position.z - prev.z)/(n
 PVP.lastState.moving = mv;
 return mv;
 }
+function localWeaponVariant(){ return (equippedSword && equippedSword.userData && equippedSword.userData.swordVariant) || 'silver'; }
 function localPlayerFormState(){
 return {
 form: localFormId(),
@@ -27125,10 +27227,14 @@ return true;
 function tryGrabCarpetSack(e){
 if(DUN.active || INT.active) return false;
 if(!CARPET.owned || CARPET.phase !== 'sack' || !CARPET.sackMesh || !CARPET.sackMesh.visible || sack.open < 0.5) return false;
+const sackZone = sackMouseZone(e);
+if(sackZone === 'map') return false;
+if(sackZone !== 'carpet'){
 _carpetPointer(e);
 const hits = _ray.intersectObject(CARPET.sackMesh, false);
 mapiDbg('carpet sack hits=' + hits.length);
 if(!hits.length) return false;
+}
 CARPET.sackPress = { x: e.clientX, y: e.clientY };
 return true;
 }
@@ -28418,6 +28524,7 @@ return best;
 const IFRIT_HEARING_RADIUS = 7.0;
 const IFRIT_SLOWCHASE_SPEED = 0.9, IFRIT_CHASE_SPEED = 1.3;
 const IFRIT_STOP_DIST = 2.0;
+const IFRIT_RETREAT_PACE = 3;   /* after a slash: the run home and the return hunt travel and animate at 3x */
 const IFRIT_LOCK_DIST = 5.5;
 const IFRIT_VERTICAL_LOCK_LIMIT = 2.5;
 function lockViewToIfrit(ifr, dt){
@@ -28822,6 +28929,22 @@ if(pointerLocked) _ndc.set(0, 0);
 else { const r = renderer.domElement.getBoundingClientRect(); _ndc.set(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1); }
 _ray.setFromCamera(_ndc, camera);
 }
+/* PC (mouse): the crosshair can only travel down, never sideways, so with the map and the carpet both in the sack the grab is chosen by how far down it points.
+   From the furthest-down look up to halfway to the sack's forward lip = the map; from halfway to the lip = the carpet. */
+function sackMouseZone(e){
+if(!mouseControls || !sack.group || sack.open < 0.5) return null;
+if(!(MAPI.owned && MAPI.state === 'sack' && CARPET.owned && CARPET.phase === 'sack')) return null;
+mapiRay(e);
+const rayPitch = Math.asin(Math.max(-1, Math.min(1, _ray.ray.direction.y)));
+const aspect = camera.aspect || 1.78, tt = Math.max(0, Math.min(1, (aspect - 0.46)/1.32));
+const scW = 0.45 + 0.15*tt, scH = 0.50*(0.30/SACK_H), lr = 0.022;
+const fwd = ((0.07 + 0.07*sack.open) + lr)*scW;                  /* horizontal reach from the camera to the forward lip */
+const drop = camera.position.y - (sack.group.position.y + (SACK_H + lr)*scH);   /* height of the lip below the eye */
+const lipPitch = -Math.atan2(drop, fwd);
+const bottomPitch = -1.55;                                        /* furthest the camera can look down */
+if(rayPitch > lipPitch + 0.035) return null;                       /* above the lip: not on the sack */
+return rayPitch <= (lipPitch + bottomPitch)/2 ? 'map' : 'carpet';
+}
 function tryGrabMapItem(e){
 if(mapMode || dragFrag || mapiReading()) return false;
 const I = INT.I;
@@ -28836,7 +28959,9 @@ return true;
 }
 mapiDbg('press: mapOwned=' + MAPI.owned + ' state=' + MAPI.state + ' hit=' + !!MAPI.sackHit + ' vis=' + (MAPI.sackHit ? MAPI.sackHit.visible : '-') + ' open=' + sack.open.toFixed(2) + ' carpet=' + CARPET.phase + ' sackMesh=' + !!CARPET.sackMesh + ' drag=' + !!MAPI.drag);
 if(MAPI.owned && MAPI.state === 'sack' && MAPI.sackHit && MAPI.sackHit.visible && sack.open > 0.5){
-if(CARPET.owned && CARPET.phase === 'sack' && CARPET.sackMesh && CARPET.sackMesh.visible){ _carpetPointer(e); if(_ray.intersectObject(CARPET.sackMesh, false).length) return false; }
+const sackZone = sackMouseZone(e);
+if(sackZone === 'carpet') return false;
+if(!sackZone && CARPET.owned && CARPET.phase === 'sack' && CARPET.sackMesh && CARPET.sackMesh.visible){ _carpetPointer(e); if(_ray.intersectObject(CARPET.sackMesh, false).length) return false; }
 MAPI.sackHit.getWorldPosition(_mapiV);
 _mapiV2.copy(_mapiV).project(camera);
 let near = false;
@@ -28845,7 +28970,7 @@ const r = renderer.domElement.getBoundingClientRect();
 const sx = r.left + (_mapiV2.x*0.5 + 0.5)*r.width, sy = r.top + (-_mapiV2.y*0.5 + 0.5)*r.height;
 const cxp = pointerLocked ? r.left + r.width/2 : e.clientX, cyp = pointerLocked ? r.top + r.height/2 : e.clientY;
 const dpx = Math.hypot(sx - cxp, sy - cyp);
-near = dpx < Math.max(90, r.height*0.14);
+near = sackZone === 'map' || dpx < Math.max(90, r.height*0.14);
 mapiDbg('map dist=' + Math.round(dpx) + 'px near=' + near + ' z=' + _mapiV2.z.toFixed(3));
 }
 if(near){
@@ -29584,10 +29709,15 @@ if(DUN.reflection){ checkSwordVsMarid(); return; }
 const ifr = DUN.ifrit;
 if(!ifr || !ifr.fig || DUN.deathSeq || ifr.defeated) return;
 if(DUN.blackIfrit && !(equippedSword && canSlayAll(equippedSword.userData.swordVariant))) return;
-const IFRIT_STRIKE_DIST = IFRIT_LOCK_DIST;
-const dist = Math.hypot(camera.position.x-ifr.fig.position.x, camera.position.z-ifr.fig.position.z);
+/* a marid (black ifrit of the keeps and moon dungeon) is the larger body: reach is measured to its head and scaled with its size */
+let IFRIT_STRIKE_DIST = IFRIT_LOCK_DIST, vLimit = IFRIT_VERTICAL_LOCK_LIMIT, sx = ifr.fig.position.x, sz = ifr.fig.position.z;
+if(DUN.blackIfrit){
+const sc = maridSizeFactor(ifr), hp = maridHeadWorld(ifr);
+IFRIT_STRIKE_DIST = IFRIT_LOCK_DIST*sc; vLimit = IFRIT_VERTICAL_LOCK_LIMIT*sc; sx = hp.x; sz = hp.z;
+}
+const dist = Math.hypot(camera.position.x-sx, camera.position.z-sz);
 const floorDy = Math.abs(dunFloorHeight(ifr.fig.position.x, ifr.fig.position.z) - dunFloorHeight(camera.position.x, camera.position.z));
-if(dist < IFRIT_STRIKE_DIST && floorDy < IFRIT_VERTICAL_LOCK_LIMIT){
+if(dist < IFRIT_STRIKE_DIST && floorDy < vLimit){
 if(!ifr.alert){ ifr.alert = true; ifr.hasSeenPlayer = true; }
 if(ifr.mode === 'flee') return;   /* only the run home is safe: it can be struck again while waiting at its start or climbing */
 const nowMs = performance.now();
@@ -30252,13 +30382,24 @@ const i = Math.max(0, Math.min(DUN.W - 1, Math.floor(x/CS))), j = Math.max(0, Ma
 const c = DUN.cells && DUN.cells[i] && DUN.cells[i][j];
 return dunFloorHeight(x, z) + ((c && c.ceilH) ? c.ceilH : 3.0) - 0.15;
 }
+/* pivot height for the ceiling pose. A marid is taller than most chambers are high, so the lying body can't fit between floor and ceiling:
+   keep its underside clear of the player's head and let the rest sink into the ceiling stone, instead of dropping the pivot toward the floor */
+function ifritCeilPivotY(ifr, x, z){
+const flr = dunFloorHeight(x, z);
+let y = ifritCeilY(x, z) - (ifr.ceilDrop || 0.5);
+const clear = 2.4;
+const low = y + (ifr.ceilLow || 0);
+if(low < flr + clear) y += (flr + clear) - low;
+return y;
+}
 function ifritMeasureCeilDrop(ifr){
 const fig = ifr.fig;
 const r0 = fig.rotation.clone();
-fig.rotation.order = 'YXZ'; fig.rotation.set(-Math.PI/2, fig.rotation.y, 0);
+fig.rotation.order = 'YXZ'; fig.rotation.set(-Math.PI, fig.rotation.y, 0);   /* measured in the inverted ceiling pose */
 fig.updateMatrixWorld(true);
 const box = new THREE.Box3().setFromObject(fig);
 ifr.ceilDrop = isFinite(box.max.y) ? box.max.y - fig.position.y : 0.5;
+ifr.ceilLow = isFinite(box.min.y) ? box.min.y - fig.position.y : -0.5;   /* how far the lying body hangs below its pivot */
 fig.rotation.copy(r0);
 fig.updateMatrixWorld(true);
 }
@@ -30267,8 +30408,8 @@ const fig = ifr.fig;
 const m = ifr.mode;
 if(m === 'flee' || m === 'wait' || m === 'toWall') fig.position.y = dunFloorHeight(fig.position.x, fig.position.z) - (fig.userData.footShortfall || 0);
 if(m === 'flee'){
-const d = ifritMoveToward(ifr, ifr.home.x, ifr.home.z, 2.6, dt);
-updateIfritWalk(fig, dt*2);
+const d = ifritMoveToward(ifr, ifr.home.x, ifr.home.z, 2.6*IFRIT_RETREAT_PACE, dt);
+updateIfritWalk(fig, dt*2*IFRIT_RETREAT_PACE);
 updateIfritHead(fig, dt);
 if(d < 0.7){ ifr.mode = 'wait'; ifr.waitT = 3.0; }
 } else if(m === 'wait'){
@@ -30287,16 +30428,20 @@ ifritMeasureCeilDrop(ifr);
 }
 } else if(m === 'toWall'){
 const W = ifr.wall;
-const d = ifritMoveToward(ifr, W.x, W.z, 2.2, dt);
-updateIfritWalk(fig, dt*2); updateIfritHead(fig, dt);
-if(d < 0.45){ ifr.mode = 'wall'; ifr.climbY = 0; ifr.wallBase = fig.position.y; fig.rotation.y = Math.atan2(W.nx, W.nz); }
+const d = ifritMoveToward(ifr, W.x, W.z, 2.2*IFRIT_RETREAT_PACE, dt);
+updateIfritWalk(fig, dt*2*IFRIT_RETREAT_PACE); updateIfritHead(fig, dt);
+if(d < 0.45){ ifr.mode = 'wall'; ifr.climbY = 0; ifr.wallPitchT = 0; ifr.wallBase = fig.position.y; fig.rotation.y = Math.atan2(W.nx, W.nz); }
 } else if(m === 'wall'){
 const W = ifr.wall;
 const fl = dunFloorHeight(fig.position.x, fig.position.z) - (fig.userData.footShortfall || 0);
-const top = (ifritCeilY(fig.position.x, fig.position.z) - dunFloorHeight(fig.position.x, fig.position.z))*0.55;
-ifr.climbY += 1.8*dt;
+const top = Math.max(0.5, ifritCeilPivotY(ifr, fig.position.x, fig.position.z) - fl);   /* all the way up to the ceiling */
+/* first 90 deg: rears nose-up with its belly on the wall, then climbs */
+ifr.wallPitchT = Math.min(1, (ifr.wallPitchT || 0) + dt/0.7);
+const pe = ifr.wallPitchT*ifr.wallPitchT*(3 - 2*ifr.wallPitchT);
+fig.rotation.order = 'YXZ';
+fig.rotation.set(-Math.PI/2*pe, Math.atan2(W.nx, W.nz), 0);   /* faces the wall */
+if(ifr.wallPitchT >= 1) ifr.climbY += 1.8*dt;
 fig.position.y = fl + Math.min(ifr.climbY, top);
-fig.rotation.y = Math.atan2(W.nx, W.nz);   /* faces the wall */
 updateIfritWalk(fig, dt*2.5); updateIfritHead(fig, dt);
 if(ifr.climbY >= top){ ifr.mode = 'over'; ifr.overT = 0; ifr.overY0 = fig.position.y; }
 } else if(m === 'over'){
@@ -30304,8 +30449,8 @@ ifr.overT += dt/1.3;
 const u = Math.min(1, ifr.overT), e = u*u*(3 - 2*u);
 const W = ifr.wall;
 fig.rotation.order = 'YXZ';
-fig.rotation.set(-Math.PI/2*e, Math.atan2(W.nx, W.nz), 0);
-const cy = ifritCeilY(fig.position.x, fig.position.z) - (ifr.ceilDrop || 0.5);
+fig.rotation.set(-Math.PI/2 - Math.PI/2*e, Math.atan2(W.nx, W.nz), 0);   /* second 90 deg: over onto the ceiling, inverted */
+const cy = ifritCeilPivotY(ifr, fig.position.x, fig.position.z);
 fig.position.y = ifr.overY0 + (cy - ifr.overY0)*e;
 updateIfritWalk(fig, dt*1.5); updateIfritHead(fig, dt);
 if(u >= 1){ ifr.mode = 'ceiling'; ifr.cYaw = fig.rotation.y - Math.PI; ifr.path = null; ifr.alert = true; ifr.silent = true; }
@@ -30318,6 +30463,31 @@ const fig = ifr.fig;
 if(ifr.mode && ifr.mode !== 'creep' && ifr.mode !== 'ceiling'){ ifritRetreatTick(ifr, dt); return; }
 if(ifr.mode === 'creep'){ ifr.alert = true; ifr.silent = true; }
 if(ifr.mode === 'ceiling'){ fig.rotation.order = 'YXZ'; fig.rotation.set(0, ifr.cYaw, 0); }
+/* settle facing: until it notices anything, it watches the way in (toward the grotto's exit toward the entrance), not a fixed direction */
+if(!ifr.facingInit && !ifr.alert && !ifr.hasSeenPlayer){
+ifr.facingInit = true;
+try{
+const [fi0, fj0] = dunCellOf(fig.position.x, fig.position.z);
+const pth = ifritFindPath(fi0, fj0, 0, DUN.entranceJ) || [];
+let tgt = null;
+for(const c of pth){ const cc = DUN.cells[c[0]] && DUN.cells[c[0]][c[1]]; if(cc && cc.chamber !== ifr.chamberId){ tgt = c; break; } }
+if(!tgt && pth.length) tgt = pth[pth.length - 1];
+if(tgt){
+const tx = (tgt[0] + 0.5)*DUN.CS, tz = (tgt[1] + 0.5)*DUN.CS;
+if(Math.hypot(tx - fig.position.x, tz - fig.position.z) > 0.01) fig.rotation.y = Math.atan2(tx - fig.position.x, tz - fig.position.z);
+}
+}catch(e){}
+}
+/* anyone who walks into its grotto in plain sight, even silently, is seen: it turns to face them and comes */
+if(!ifr.alert && !ifr.hasSeenPlayer && ifr.bounds){
+const gb = ifr.bounds, gm = 1.0, gx = camera.position.x, gz = camera.position.z;
+if(gx > gb.X0 - gm && gx < gb.X1 + gm && gz > gb.Z0 - gm && gz < gb.Z1 + gm
+&& Math.abs(dunFloorHeight(fig.position.x, fig.position.z) - dunFloorHeight(gx, gz)) < IFRIT_VERTICAL_LOCK_LIMIT
+&& dunLineOfSight(fig.position.x, fig.position.z, gx, gz)){
+fig.rotation.y = Math.atan2(gx - fig.position.x, gz - fig.position.z);
+ifr.hasSeenPlayer = true; ifr.alert = true;
+}
+}
 if(!ifr.alert && !ifr.hasSeenPlayer && ifritSeesPlayer(ifr)){
 ifr.hasSeenPlayer = true;
 ifr.alert = true;
@@ -30368,7 +30538,8 @@ ifr.target.z = camera.position.z;
 moving = true;
 }
 if(moving){
-const speed = ifr.silent ? IFRIT_SLOWCHASE_SPEED : (ifr.alert ? IFRIT_CHASE_SPEED : IFRIT_SLOWCHASE_SPEED);
+const pace = ifr.silent ? IFRIT_RETREAT_PACE : 1;
+const speed = (ifr.silent ? IFRIT_SLOWCHASE_SPEED : (ifr.alert ? IFRIT_CHASE_SPEED : IFRIT_SLOWCHASE_SPEED))*pace;
 const waypoint = ifritNextStep(ifr, dt);
 const mdx = waypoint.x - fig.position.x, mdz = waypoint.z - fig.position.z;
 const mdist = Math.hypot(mdx, mdz);
@@ -30388,7 +30559,7 @@ fig.rotation.y = Math.atan2(mdx, mdz);
 const fdx = camera.position.x - fig.position.x, fdz = camera.position.z - fig.position.z;
 if(Math.hypot(fdx,fdz) > 1e-4) fig.rotation.y = Math.atan2(fdx, fdz);
 }
-updateIfritWalk(fig, dt);
+updateIfritWalk(fig, dt*pace);
 if(sees && ifr.mode !== 'ceiling') updateIfritHeadAim(fig, camera); else updateIfritHead(fig, dt);   /* no head lock-on through a wall */
 const distToPlayer = Math.hypot(fig.position.x-camera.position.x, fig.position.z-camera.position.z);
 if(distToPlayer < 0.5 || ifr.silent){
@@ -30410,8 +30581,8 @@ rebuildChainAuto(armChain);
 }
 if(ifr.mode === 'ceiling'){
 ifr.cYaw = fig.rotation.y;
-fig.rotation.set(-Math.PI/2, ifr.cYaw + Math.PI, 0);
-fig.position.y = ifritCeilY(fig.position.x, fig.position.z) - (ifr.ceilDrop || 0.5);
+fig.rotation.set(-Math.PI, ifr.cYaw + Math.PI, 0);   /* inverted: ceiling is his floor */
+fig.position.y = ifritCeilPivotY(ifr, fig.position.x, fig.position.z);
 } else fig.position.y = dunFloorHeight(fig.position.x, fig.position.z) - (fig.userData.footShortfall || 0);
 if(moving && !DUN.deathSeq){
 const dNow = Math.hypot(camera.position.x-fig.position.x, camera.position.z-fig.position.z);
