@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 32;
 const TICK_MS = 66;               // ~15 snapshots/sec
 const MAX_MSG_BYTES = 2048;
-const FORMS = ['bedouin', 'keru', 'latin', 'sultan', 'king', 'queen', 'ifrit'];
+const FORMS = ['bedouin', 'keru', 'latin', 'sultan', 'king', 'queen', 'ifrit', 'mamluk', 'knight'];
 
 const PUBLIC = path.join(__dirname, 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
@@ -177,7 +177,7 @@ function makeCorpse(victimId, rem) {
   const x = num(rem.x), y = num(rem.y), z = num(rem.z);
   if (x === undefined || y === undefined || z === undefined) return;
   const place = (typeof rem.place === 'string' && rem.place.length <= 64) ? rem.place : 'out';
-  const gold = intIn(rem.gold, 0, 100000000)   // tenths of a unit (an ornament is 0.1) || 0;
+  const gold = intIn(rem.gold, 0, 100000000) || 0;   // tenths of a unit (an ornament is 0.1)
   const items = [];
   const tre = Math.floor(gold / 10), orn = gold % 10;
   const nT = Math.min(tre, 40);
