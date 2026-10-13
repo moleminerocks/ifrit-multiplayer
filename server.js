@@ -187,7 +187,7 @@ function makeCorpse(victimId, rem) {
   }
   for (let k = 0; k < orn; k++) items.push({ id: 'o' + k, kind: 'gold', value: 1 });
   const hs = (rem.heads && typeof rem.heads === 'object') ? rem.heads : {};
-  for (const kind of ['ifrit', 'spriggan', 'bucca']) {
+  for (const kind of ['ifrit', 'marid', 'spriggan', 'bucca']) {
     const n = intIn(hs[kind], 0, 30) || 0;
     for (let k = 0; k < n; k++) items.push({ id: 'h' + kind[0] + k, kind: 'head', head: kind });
   }
